@@ -50,11 +50,15 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
         preserve, anonymize = [], {}
         for c in table["columns"]:
             name, low = c["COLUMN_NAME"], c["COLUMN_NAME"].lower()
-            if c["COLUMN_KEY"] == "PRI" or low.endswith("_id") or low == "id":
+            is_identifier = c["COLUMN_KEY"] == "PRI" or low.endswith("_id") or low == "id"
+            if is_identifier:
                 preserve.append(name)
             if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|email", low):
                 preserve.append(name)
-            elif re.search(r"phone|mobile|tel", low):
+            elif is_identifier:
+                # Keep keys and foreign-key columns unchanged to retain relationships.
+                continue
+            elif re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", low):
                 anonymize[name] = {"type": "phone"}
             elif re.search(r"first.?name|last.?name|full.?name|^name$", low):
                 anonymize[name] = {"type": "name"}
@@ -137,8 +141,11 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
         for col, rule in config.get("anonymize", {}).items():
             if col not in cols:
                 raise ValueError(f"Rules reference missing column {tn}.{col}")
+            low = col.lower()
+            if cols[col]["COLUMN_KEY"] == "PRI" or low == "id" or low.endswith("_id"):
+                raise ValueError(f"Identifier column {tn}.{col} must be preserved to keep database relationships intact; remove it from anonymize")
             if col in preserved:
-                raise ValueError(f"{tn}.{col} cannot be both preserved and anonymized")
+                raise ValueError(f"{tn}.{col} is in both preserve and anonymize; remove it from anonymize")
             if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|email", col, re.I):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
             if cols[col]["COLUMN_KEY"] == "UNI":
