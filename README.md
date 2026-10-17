@@ -30,6 +30,30 @@ SHOW GRANTS FOR 'anonymizer_readonly'@'localhost';
 
 Use this username, source database name, and password in `config.json` and the `MYSQL_SOURCE_PASSWORD` environment variable. The account host (`localhost`) must match where the CLI connects from. If MySQL sees the connection from a different machine or over a different host, create the account with the appropriate client host instead. `mysqldump` also needs `SELECT`; depending on MySQL version and dump options it may require additional privileges such as `LOCK TABLES` or `TRIGGER`.
 
+### Create a destination user
+
+The destination schema must already exist and be empty. Log in as a MySQL administrator and create a separate account for writing the copy. Replace `development_database` and the password with your destination schema and a strong password:
+
+```bash
+# Open the MySQL client; it prompts for the administrator password
+mysql -u root -p
+```
+
+Run the following SQL in the MySQL prompt:
+
+```sql
+-- Create a local account for the anonymizer to create and populate tables
+CREATE USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';
+
+-- Allow table creation, row insertion, indexes, and foreign key references
+GRANT CREATE, INSERT, INDEX, REFERENCES ON `development_database`.* TO 'anonymizer_writer'@'localhost';
+
+-- Confirm the account's privileges
+SHOW GRANTS FOR 'anonymizer_writer'@'localhost';
+```
+
+Set `destination.user`, `destination.database`, and `MYSQL_DESTINATION_PASSWORD` in the CLI configuration/environment to match this account. The account host must match where the CLI connects from, just as for the source user. If the account already exists but its password is wrong, update it as an administrator with `ALTER USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';`. If the schema name, username, host, and password all match but access is denied, check the server's account host matching and grants with `SHOW GRANTS`.
+
 Run these commands from the project directory:
 
 ```bash
