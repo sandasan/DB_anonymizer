@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -16,6 +17,47 @@ def load_json(path: str) -> dict[str, Any]:
     if not isinstance(obj, dict):
         raise ValueError(f"{path} must contain a JSON object")
     return obj
+
+
+def migrate_identifier_rules(rules: dict[str, Any], tables: list[dict[str, Any]]) -> list[str]:
+    """Move primary and conventional ID columns out of anonymization rules."""
+    primary_keys = {
+        table["name"]: {c["COLUMN_NAME"] for c in table["columns"] if c["COLUMN_KEY"] == "PRI"}
+        for table in tables
+    }
+    moved = []
+    for table, config in rules.get("tables", {}).items():
+        anonymize = config.get("anonymize", {})
+        preserve = config.setdefault("preserve", [])
+        if not isinstance(anonymize, dict) or not isinstance(preserve, list):
+            raise ValueError(f"Invalid preserve/anonymize rules for table {table!r}")
+        identifiers = primary_keys.get(table, set())
+        for column in list(anonymize):
+            low = column.lower()
+            if column in identifiers or low == "id" or low.endswith("_id"):
+                del anonymize[column]
+                if column not in preserve:
+                    preserve.append(column)
+                moved.append(f"{table}.{column}")
+        config["preserve"] = sorted(set(preserve))
+    return moved
+
+
+def save_json_atomic(path: str, data: dict[str, Any]) -> None:
+    target = os.path.abspath(path)
+    directory = os.path.dirname(target)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=directory, delete=False) as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+            temp_path = f.name
+        os.replace(temp_path, target)
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 
 def connect(settings: dict[str, Any]):

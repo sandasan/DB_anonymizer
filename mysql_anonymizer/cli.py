@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from .core import connect, copy_database, init_rules, inspect_schema, load_json
+from .core import connect, copy_database, init_rules, inspect_schema, load_json, migrate_identifier_rules, save_json_atomic
 
 
 def check_config(config: dict) -> None:
@@ -45,6 +45,10 @@ def main() -> None:
                 print(f"Wrote starter rules to {args.output}; review every table and column.")
             else:
                 rules = load_json(args.rules)
+                moved = migrate_identifier_rules(rules, tables)
+                if moved:
+                    save_json_atomic(args.rules, rules)
+                    print("Automatically moved identifier columns to preserve in rules.json: " + ", ".join(moved), file=sys.stderr)
                 if not rules.get("confirm_copy_password_hashes"):
                     raise ValueError("Set confirm_copy_password_hashes=true in rules after reviewing the credential risk")
                 if config.get("allow_source_table_locks"):
