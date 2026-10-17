@@ -1,0 +1,6 @@
+{
+  "source": {"host": "127.0.0.1", "port": 3306, "user": "anonymizer_readonly", "password_env": "MYSQL_SOURCE_PASSWORD", "database": "production_db"},
+  "destination": {"host": "127.0.0.1", "port": 3306, "user": "anonymizer_writer", "password_env": "MYSQL_DESTINATION_PASSWORD", "database": "development_db"},
+  "confirm_copy_password_hashes": false,
+  "batch_size": 500
+}
