@@ -101,7 +101,7 @@ mysql-anonymizer inspect --config config.json
 mysql-anonymizer init-config --config config.json --output rules.json
 ```
 
-Review `rules.json` carefully. List sensitive data columns for anonymization and preserve primary/foreign keys, login names, email addresses used for login, password hashes, and other authentication fields. The starter rules use column-name guesses and cannot identify every sensitive field. When `copy` finds a primary key, `id`, or `*_id` column under `anonymize`, it automatically moves that column to `preserve` and saves the repaired rules file before copying. For unique text fields such as `accommtype.name`, the generated `name` transformation is supported and collision handling keeps transformed values distinct. You can also set `{"type": "unique"}` to create opaque pseudonyms. Composite unique indexes need application-specific review. When satisfied that the copied password hashes should remain usable, set `"confirm_copy_password_hashes": true` in `rules.json`, then run:
+Review `rules.json` carefully. List sensitive data columns for anonymization and preserve primary/foreign keys, login names, email addresses used for login, password hashes, and other authentication fields. The starter rules use column-name guesses and cannot identify every sensitive field. When `copy` finds a primary key, `id`, or `*_id` column under `anonymize`, it automatically moves that column to `preserve` and saves the repaired rules file before copying. MySQL `SET` values are converted from the connector's Python set representation to MySQL's comma-separated form when inserted. For unique text fields such as `accommtype.name`, the generated `name` transformation is supported and collision handling keeps transformed values distinct. You can also set `{"type": "unique"}` to create opaque pseudonyms. Composite unique indexes need application-specific review. When satisfied that the copied password hashes should remain usable, set `"confirm_copy_password_hashes": true` in `rules.json`, then run:
 
 ```bash
 # Copy into the separate, empty destination schema
@@ -109,6 +109,30 @@ mysql-anonymizer copy --config config.json --rules rules.json
 ```
 
 The source should be accessed through a read-only account; the destination user should only have access to the destination schema. Destination must be empty. The tool never drops or truncates objects. It currently copies base tables and rows, not views, triggers, procedures, events, or grants. Review app-specific columns, free text, and JSON manually. Protect the resulting database like production credentials.
+
+### Recover after a failed copy
+
+A failed copy may leave some or all tables in the destination. MySQL commits table creation separately, so rolling back inserted rows does not necessarily remove the created tables. The next run requires an empty destination and will stop if those tables remain.
+
+The safest recovery is to create a new, empty destination schema and change `destination.database` in `config.json` to that schema. Grant the destination user access to the new schema as described above.
+
+If you want to reuse the previous destination, first verify the exact schema name in `config.json`. The following commands permanently delete that schema and all its contents; run them only if it is the disposable anonymized copy, never the source database:
+
+```sql
+-- Replace this with the exact destination.database value from config.json
+DROP DATABASE `development_database`;
+CREATE DATABASE `development_database`;
+```
+
+If the destination user loses access after recreating the schema, reapply its `GRANT CREATE, INSERT, INDEX, REFERENCES` statement. Then check that the destination is empty before retrying:
+
+```sql
+SELECT TABLE_NAME
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = 'development_database';
+```
+
+Proceed only when the query returns no rows.
 
 ### If the source has non-InnoDB tables
 
