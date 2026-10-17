@@ -115,15 +115,28 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"Unsupported transform for {tn}.{col}")
 
 
-def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500) -> dict[str, int]:
+def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
+                  allow_source_table_locks: bool = False) -> dict[str, int]:
     tables = inspect_schema(source, schema)
-    if any(t["engine"] != "InnoDB" for t in tables):
-        raise ValueError("All source tables must use InnoDB for a consistent snapshot")
+    non_transactional = [t["name"] for t in tables if t["engine"] != "InnoDB"]
+    if non_transactional and not allow_source_table_locks:
+        names = ", ".join(non_transactional)
+        raise ValueError(f"Non-InnoDB source tables found ({names}). Set allow_source_table_locks=true only if it is acceptable to block writes to all source tables during the copy")
     validate_rules(tables, rules)
-    source.start_transaction(isolation_level="REPEATABLE READ", consistent_snapshot=True, readonly=True)
     dst, src = destination.cursor(), source.cursor()
     counts: dict[str, int] = {}
+    source_locked = False
     try:
+        if non_transactional:
+            # MySQL releases table locks on START TRANSACTION. Disable autocommit first,
+            # then hold explicit READ locks across DDL inspection and all row reads.
+            src.execute("SET autocommit=0")
+            lock_list = ", ".join(f"{qname(schema, t['name'])} READ" for t in tables)
+            if lock_list:
+                src.execute(f"LOCK TABLES {lock_list}")
+                source_locked = True
+        else:
+            source.start_transaction(isolation_level="REPEATABLE READ", consistent_snapshot=True, readonly=True)
         dst.execute("SET FOREIGN_KEY_CHECKS=0")
         for t in tables:
             name = t["name"]
@@ -161,7 +174,17 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             dst.execute("SET FOREIGN_KEY_CHECKS=1")
         except Exception:
             pass
+        if source_locked:
+            try:
+                source.rollback()
+            except Exception:
+                pass
+            try:
+                src.execute("UNLOCK TABLES")
+            except Exception:
+                pass
         src.close()
         dst.close()
-        source.rollback()
+        if not source_locked:
+            source.rollback()
     return counts

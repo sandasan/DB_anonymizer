@@ -47,6 +47,8 @@ def main() -> None:
                 rules = load_json(args.rules)
                 if not rules.get("confirm_copy_password_hashes"):
                     raise ValueError("Set confirm_copy_password_hashes=true in rules after reviewing the credential risk")
+                if config.get("allow_source_table_locks"):
+                    print("WARNING: allow_source_table_locks is enabled; if non-InnoDB tables exist, the copy will block writes to every source table until it finishes.", file=sys.stderr)
                 destination = connect(config["destination"])
                 try:
                     cur = destination.cursor()
@@ -54,7 +56,8 @@ def main() -> None:
                     if cur.fetchone()[0] != 0:
                         raise ValueError("Destination schema must be empty; nothing was changed")
                     cur.close()
-                    counts = copy_database(source, destination, config["source"]["database"], rules, config.get("batch_size", 500))
+                    counts = copy_database(source, destination, config["source"]["database"], rules,
+                                           config.get("batch_size", 500), config.get("allow_source_table_locks", False))
                     print("Copy complete:")
                     for table, count in counts.items():
                         print(f"  {table}: {count} rows")

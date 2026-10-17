@@ -24,6 +24,9 @@ CREATE USER 'anonymizer_readonly'@'localhost' IDENTIFIED BY 'choose-a-strong-pas
 -- Permit reading source tables and viewing view definitions
 GRANT SELECT, SHOW VIEW ON `source_database`.* TO 'anonymizer_readonly'@'localhost';
 
+-- Optional: needed only if allow_source_table_locks is enabled for non-InnoDB tables
+GRANT LOCK TABLES ON `source_database`.* TO 'anonymizer_readonly'@'localhost';
+
 -- Confirm the account's privileges
 SHOW GRANTS FOR 'anonymizer_readonly'@'localhost';
 ```
@@ -106,3 +109,29 @@ mysql-anonymizer copy --config config.json --rules rules.json
 ```
 
 The source should be accessed through a read-only account; the destination user should only have access to the destination schema. Destination must be empty. The tool never drops or truncates objects. It currently copies base tables and rows, not views, triggers, procedures, events, or grants. Review app-specific columns, free text, and JSON manually. Protect the resulting database like production credentials.
+
+### If the source has non-InnoDB tables
+
+By default, the copy command requires all source tables to use InnoDB so it can read them from one consistent snapshot. First, find tables using another engine:
+
+```sql
+-- Run in the MySQL client; replace source_database with the source schema
+SELECT TABLE_NAME, ENGINE
+FROM information_schema.TABLES
+WHERE TABLE_SCHEMA = 'source_database'
+  AND TABLE_TYPE = 'BASE TABLE'
+  AND ENGINE <> 'InnoDB';
+```
+
+To copy without changing table engines, enable `"allow_source_table_locks": true` in `config.json` and grant `LOCK TABLES` on the source schema as shown above. The tool then holds read locks on every source table until the copy finishes. This prevents writes and may block application requests that write to those tables; use it only during an approved quiet window and monitor the copy time. If another session holds an incompatible lock or transaction, acquiring the locks can wait or fail. The CLI prints a warning when this option is enabled.
+
+For a production database where blocking writes is not acceptable, take a backup and restore it to a separate staging schema/server, convert the non-InnoDB tables in staging, and point the anonymizer's `source.database` at that staging schema. Converting an engine can lock or rebuild a table and may affect disk space or table-specific behavior, so review the application and maintenance impact first.
+
+On the staging database, a database administrator can convert each listed table with:
+
+```sql
+-- Example only: replace the schema and table with a result from the query above
+ALTER TABLE `staging_database`.`legacy_table` ENGINE=InnoDB;
+```
+
+Re-run the engine query and proceed only when it returns no rows. Keep the source account read-only; perform conversions using a separate administrator account.
