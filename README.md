@@ -57,6 +57,57 @@ SHOW GRANTS FOR 'anonymizer_writer'@'localhost';
 
 Set `destination.user`, `destination.database`, and `MYSQL_DESTINATION_PASSWORD` in the CLI configuration/environment to match this account. The account host must match where the CLI connects from, just as for the source user. If the account already exists but its password is wrong, update it as an administrator with `ALTER USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';`. If the schema name, username, host, and password all match but access is denied, check the server's account host matching and grants with `SHOW GRANTS`.
 
+### Use a MariaDB server in Docker
+
+The CLI can connect from the host to a MariaDB container through a published port, or from another container on the same Docker network. MariaDB is generally compatible with MySQL clients, but this project currently uses MySQL Connector/Python and has not been specifically verified against every MariaDB version. Start by running `inspect` to verify the connection and schema queries.
+
+When running the CLI on the host, publish the container's MariaDB port on a host port. For example, a Compose service can include:
+
+```yaml
+services:
+  mariadb:
+    image: mariadb:11.4
+    ports:
+      - "127.0.0.1:3307:3306"
+```
+
+The server listens on port `3306` inside the container; the example publishes it as host port `3307`, bound to localhost. Open the MariaDB client inside the running container:
+
+```bash
+# Replace the container name with yours; MariaDB prompts for the root password
+docker exec -it YOUR_MARIADB_CONTAINER mariadb -u root -p
+```
+
+In the MariaDB prompt, create a separate empty destination schema and the source/destination accounts. Replace database names and passwords with your own:
+
+```sql
+CREATE DATABASE `anonymized_copy`;
+
+CREATE USER 'anonymizer_readonly'@'%' IDENTIFIED BY 'choose-a-source-password';
+GRANT SELECT, SHOW VIEW ON `source_database`.* TO 'anonymizer_readonly'@'%';
+
+CREATE USER 'anonymizer_writer'@'%' IDENTIFIED BY 'choose-a-destination-password';
+GRANT CREATE, INSERT, INDEX, REFERENCES ON `anonymized_copy`.* TO 'anonymizer_writer'@'%';
+```
+
+If `allow_source_table_locks` is enabled for non-InnoDB tables, also grant:
+
+```sql
+GRANT LOCK TABLES ON `source_database`.* TO 'anonymizer_readonly'@'%';
+```
+
+For the host-running-CLI setup, set both connection `host` values in `config.json` to `127.0.0.1` and both `port` values to `3307`. Use the source and destination schema names and usernames above, then provide their passwords through the environment variables named by `password_env`. Keep the published port bound to `127.0.0.1` when only local access is needed.
+
+If the CLI runs in another container, put both containers on the same Docker network and use the MariaDB Compose service name (for example, `mariadb`) as the host and `3306` as the port. In that case `localhost` refers to the CLI container itself, not the database container. The account host must also permit connections from the CLI container; `%` in these examples does that, so restrict network exposure to the intended Docker network.
+
+With the project's virtual environment active, verify connectivity before copying:
+
+```bash
+mysql-anonymizer inspect --config config.json
+```
+
+If inspection fails because of connector incompatibility, installing MariaDB Connector/Python alone will not switch this application to that driver; the app currently imports MySQL Connector/Python and would need a connector adapter change.
+
 Run these commands from the project directory:
 
 ```bash
