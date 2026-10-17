@@ -249,6 +249,10 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 for row in rows:
                     values = list(row)
                     for i, col in enumerate(names):
+                        if column_info[col]["DATA_TYPE"].lower() == "set" and isinstance(values[i], set):
+                            # mysql-connector-python decodes MySQL SET fields as Python sets,
+                            # while INSERT parameters require MySQL's comma-separated form.
+                            values[i] = ",".join(sorted(values[i]))
                         if col in transforms:
                             new_value = transform(values[i], transforms[col], name, col)
                             if col in unique_state and new_value is not None:
