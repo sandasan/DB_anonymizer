@@ -6,6 +6,30 @@ A local CLI to copy MySQL table definitions and data into a separate, empty sche
 
 Requirements: Python 3.11+, MySQL access, and an empty destination schema. Use a read-only account for the source and a destination user limited to the destination schema.
 
+### Create a read-only source user
+
+Log in to MySQL with an administrator account. Replace `source_database` and the password with your actual database name and a strong password:
+
+```bash
+# Open the MySQL client; it prompts for the administrator password
+mysql -u root -p
+```
+
+Then run these SQL statements in the MySQL prompt:
+
+```sql
+-- Create a local account for the anonymizer to read the source
+CREATE USER 'anonymizer_readonly'@'localhost' IDENTIFIED BY 'choose-a-strong-password';
+
+-- Permit reading source tables and viewing view definitions
+GRANT SELECT, SHOW VIEW ON `source_database`.* TO 'anonymizer_readonly'@'localhost';
+
+-- Confirm the account's privileges
+SHOW GRANTS FOR 'anonymizer_readonly'@'localhost';
+```
+
+Use this username, source database name, and password in `config.json` and the `MYSQL_SOURCE_PASSWORD` environment variable. The account host (`localhost`) must match where the CLI connects from. If MySQL sees the connection from a different machine or over a different host, create the account with the appropriate client host instead. `mysqldump` also needs `SELECT`; depending on MySQL version and dump options it may require additional privileges such as `LOCK TABLES` or `TRIGGER`.
+
 Run these commands from the project directory:
 
 ```bash
