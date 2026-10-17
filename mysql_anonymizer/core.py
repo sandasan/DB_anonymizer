@@ -82,6 +82,9 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         return f"+1555{stable_number(table, column, value, 10**7):07d}"
     if kind == "name":
         return f"Person{n % 100000000:08d}"
+    if kind == "unique":
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).hexdigest()
+        return f"anon{digest}"
     if kind == "address":
         return f"{n % 9999 + 1} Example Street"
     if kind == "date_shift":
@@ -90,6 +93,35 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
             return value + delta
         raise ValueError(f"date_shift configured on non-date {table}.{column}")
     raise ValueError(f"Unsupported transformation {kind!r} for {table}.{column}")
+
+
+def unique_text(value: Any, candidate: Any, table: str, column: str, max_length: int,
+                mapping: dict[Any, str], used: set[str]) -> str:
+    """Fit an anonymized string to a unique text column and resolve collisions."""
+    if value in mapping:
+        return mapping[value]
+    candidate = str(candidate)[:max_length]
+    if candidate not in used:
+        mapping[value] = candidate
+        used.add(candidate)
+        return candidate
+    # A collision can occur after truncation or with a low-cardinality transform.
+    # Allocate a deterministic hash pseudonym, retrying until it is unused.
+    for attempt in range(100_000):
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}\0{attempt}".encode()).hexdigest()
+        replacement = ("a" + digest)[:max_length]
+        if replacement not in used:
+            mapping[value] = replacement
+            used.add(replacement)
+            return replacement
+    raise ValueError(f"Could not create a unique anonymized value for {table}.{column}; its maximum length may be too short")
+
+
+def text_column_length(column_type: str) -> int:
+    match = re.search(r"(?:var)?char\((\d+)\)", column_type, re.I)
+    if match:
+        return int(match.group(1))
+    return 255
 
 
 def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
@@ -109,9 +141,12 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"{tn}.{col} cannot be both preserved and anonymized")
             if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|email", col, re.I):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
-            if cols[col]["COLUMN_KEY"] in {"PRI", "UNI"} and rule.get("type") != "email":
-                raise ValueError(f"Unique column {tn}.{col} needs a uniqueness-preserving email rule or custom policy")
-            if rule.get("type") not in {"email", "phone", "name", "address", "date_shift", "constant"}:
+            if cols[col]["COLUMN_KEY"] == "UNI":
+                if cols[col]["DATA_TYPE"].lower() not in {"char", "varchar", "tinytext", "text", "mediumtext", "longtext"}:
+                    raise ValueError(f"Unique non-text column {tn}.{col} requires an application-specific transformation")
+                if rule.get("type") not in {"email", "phone", "name", "address", "unique"}:
+                    raise ValueError(f"Unique text column {tn}.{col} requires a text transformation such as name or unique")
+            if rule.get("type") not in {"email", "phone", "name", "address", "date_shift", "constant", "unique"}:
                 raise ValueError(f"Unsupported transform for {tn}.{col}")
 
 
@@ -152,6 +187,12 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             qcols = ",".join(f"`{c.replace('`', '``')}`" for c in names)
             src.execute(f"SELECT {qcols} FROM {qname(schema, name)}")
             transforms = rules.get("tables", {}).get(name, {}).get("anonymize", {})
+            column_info = {c["COLUMN_NAME"]: c for c in cols}
+            unique_state = {
+                col: ({}, set())
+                for col in transforms
+                if column_info[col]["COLUMN_KEY"] == "UNI"
+            }
             insert = f"INSERT INTO `{name.replace('`', '``')}` ({qcols}) VALUES ({','.join(['%s'] * len(names))})"
             count = 0
             while rows := src.fetchmany(batch_size):
@@ -160,7 +201,13 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                     values = list(row)
                     for i, col in enumerate(names):
                         if col in transforms:
-                            values[i] = transform(values[i], transforms[col], name, col)
+                            new_value = transform(values[i], transforms[col], name, col)
+                            if col in unique_state and new_value is not None:
+                                mapping, used = unique_state[col]
+                                new_value = unique_text(values[i], new_value, name, col,
+                                                        text_column_length(column_info[col]["COLUMN_TYPE"]),
+                                                        mapping, used)
+                            values[i] = new_value
                     output.append(tuple(values))
                 dst.executemany(insert, output)
                 count += len(output)
