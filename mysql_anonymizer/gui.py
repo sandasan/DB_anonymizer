@@ -124,6 +124,17 @@ class AnonymizerApp(tk.Tk):
         self._rules_path_row(paths, 1)
         self._path_row(paths, 2, "Mapping store (optional)", self.mapping_path, self._choose_mapping)
 
+        actions = ttk.Frame(self, padding=(12, 4, 12, 4))
+        actions.pack(fill="x")
+        self.save_config_button = ttk.Button(actions, text="Save config", command=self._save_config)
+        self.save_config_button.pack(side="left")
+        self.inspect_button = ttk.Button(actions, text="Inspect source", command=self._inspect)
+        self.inspect_button.pack(side="left", padx=8)
+        self.test_connections_button = ttk.Button(actions, text="Test connections", command=self._test_connections)
+        self.test_connections_button.pack(side="left")
+        self.copy_button = ttk.Button(actions, text="Copy selected tables", command=self._copy)
+        self.copy_button.pack(side="right")
+
         self.tabs_widget = ttk.Notebook(self)
         self.tabs_widget.pack(fill="both", expand=True, padx=12, pady=8)
         self.connection_tab = ttk.Frame(self.tabs_widget, padding=16)
@@ -144,16 +155,6 @@ class AnonymizerApp(tk.Tk):
 
         footer = ttk.Frame(self, padding=(12, 4, 12, 12))
         footer.pack(fill="both")
-        buttons = ttk.Frame(footer)
-        buttons.pack(fill="x", pady=(0, 8))
-        self.save_config_button = ttk.Button(buttons, text="Save config", command=self._save_config)
-        self.save_config_button.pack(side="left")
-        self.inspect_button = ttk.Button(buttons, text="Inspect source", command=self._inspect)
-        self.inspect_button.pack(side="left", padx=8)
-        self.test_connections_button = ttk.Button(buttons, text="Test connections", command=self._test_connections)
-        self.test_connections_button.pack(side="left")
-        self.copy_button = ttk.Button(buttons, text="Copy selected tables", command=self._copy)
-        self.copy_button.pack(side="right")
         self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
         self.progress = ttk.Progressbar(footer, mode="determinate", maximum=1, value=0)
         self.progress.pack(fill="x", pady=(0, 4))
@@ -758,7 +759,7 @@ class AnonymizerApp(tk.Tk):
         if not self.tables:
             messagebox.showinfo("Inspect source first", "Inspect the source database before copying.")
             return
-        if not messagebox.askyesno("Confirm copy", "Copy selected data into the empty destination? Password hashes may be retained according to the rules."):
+        if not messagebox.askyesno("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules."):
             return
         try:
             raw = self.rules_editor.get("1.0", "end-1c").strip()
@@ -788,11 +789,7 @@ class AnonymizerApp(tk.Tk):
                 details = "\n".join(f"  {item}" for item in shown)
                 if len(stale_rules) > len(shown):
                     details += f"\n  … and {len(stale_rules) - len(shown)} more"
-                if not messagebox.askyesno(
-                    "Rules don’t match this source",
-                    "These rules refer to columns missing from the selected source and will be ignored for this copy:\n\n"
-                    f"{details}\n\nColumns without an applicable rule are copied unchanged. Continue?",
-                ):
+                if not self._confirm_stale_rules(details):
                     return
             mapping_path = self.mapping_path.get().strip() or None
             rules_path = None if stale_rules else self.rules_path.get()
@@ -802,6 +799,56 @@ class AnonymizerApp(tk.Tk):
                             mapping_path, rules_path, allow_locks, include_dependencies)
         except Exception as exc:
             messagebox.showerror("Could not start copy", str(exc))
+
+    def _confirm_stale_rules(self, details: str) -> bool:
+        message = (
+            "These rules refer to columns missing from the selected source and will be ignored for this copy:\n\n"
+            f"{details}\n\nColumns without an applicable rule are copied unchanged. Continue?"
+        )
+        dialog = tk.Toplevel(self)
+        dialog.title("Rules don’t match this source")
+        dialog.transient(self)
+        dialog.geometry("760x440")
+        dialog.minsize(600, 320)
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(1, weight=1)
+        ttk.Label(dialog, text="Review the rules that will be skipped for this copy:").grid(
+            row=0, column=0, sticky="w", padx=12, pady=(12, 6)
+        )
+        text_frame = ttk.Frame(dialog)
+        text_frame.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        text_frame.rowconfigure(0, weight=1)
+        text_frame.columnconfigure(0, weight=1)
+        message_text = tk.Text(text_frame, wrap="word", height=14, width=80)
+        scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=message_text.yview)
+        message_text.configure(yscrollcommand=scrollbar.set)
+        message_text.grid(row=0, column=0, sticky="nsew")
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        message_text.insert("1.0", message)
+        message_text.configure(state="disabled")
+
+        result = {"continue": False}
+        buttons = ttk.Frame(dialog, padding=(12, 0, 12, 12))
+        buttons.grid(row=2, column=0, sticky="ew")
+
+        def copy_message() -> None:
+            self.clipboard_clear()
+            self.clipboard_append(message)
+
+        ttk.Button(buttons, text="Copy message", command=copy_message).pack(side="left")
+
+        def finish(continue_copy: bool) -> None:
+            result["continue"] = continue_copy
+            dialog.destroy()
+
+        ttk.Button(buttons, text="Cancel", command=lambda: finish(False)).pack(side="right")
+        ttk.Button(buttons, text="Continue", command=lambda: finish(True)).pack(side="right", padx=(0, 8))
+        dialog.bind("<Escape>", lambda _event: finish(False))
+        dialog.protocol("WM_DELETE_WINDOW", lambda: finish(False))
+        dialog.grab_set()
+        message_text.focus_set()
+        self.wait_window(dialog)
+        return result["continue"]
 
     def _lookup(self) -> None:
         path = self.mapping_path.get().strip()
