@@ -21,6 +21,7 @@ from .core import (
     list_mapping_fields,
     lookup_mapping,
     migrate_identifier_rules,
+    open_mapping_store,
     prune_rules_to_schema,
     save_json_atomic,
 )
@@ -609,13 +610,20 @@ class AnonymizerApp(tk.Tk):
             self._save_rules()
 
     def _choose_mapping(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Open mapping store",
+        path = filedialog.asksaveasfilename(
+            title="Create or select mapping store",
+            defaultextension=".sqlite3",
+            confirmoverwrite=False,
             filetypes=(("SQLite databases", "*.sqlite *.sqlite3 *.db"), ("All files", "*")),
         )
         if path:
-            self.mapping_path.set(path)
-            self._load_lookup_fields()
+            try:
+                store = open_mapping_store(path)
+                store.close()
+                self.mapping_path.set(path)
+                self._load_lookup_fields()
+            except Exception as exc:
+                messagebox.showerror("Could not create mapping store", str(exc))
 
     def _load_lookup_fields(self) -> None:
         path = self.mapping_path.get().strip()
@@ -777,6 +785,13 @@ class AnonymizerApp(tk.Tk):
                 raise ValueError("Rules file must contain a JSON object")
             if not rules.get("confirm_copy_password_hashes"):
                 raise ValueError("Set confirm_copy_password_hashes=true in the rules after reviewing the credential risk")
+            mapping_path = self.mapping_path.get().strip() or None
+            if mapping_path is None and not messagebox.askyesno(
+                "No mapping store selected",
+                "No mapping store is selected. The copy will continue without saving anonymization mappings, "
+                "so you will not be able to look up original and anonymized values later. Continue?",
+            ):
+                return
             selected = [self.table_names[i] for i in self.table_list.curselection()]
             if not selected:
                 messagebox.showinfo("Select tables", "Select at least one table to copy.")
@@ -800,7 +815,6 @@ class AnonymizerApp(tk.Tk):
                     details += f"\n  … and {len(stale_rules) - len(shown)} more"
                 if not self._confirm_stale_rules(details):
                     return
-            mapping_path = self.mapping_path.get().strip() or None
             rules_path = None if stale_rules else self.rules_path.get()
             allow_locks = self.allow_locks.get()
             include_dependencies = self.include_dependencies.get()
