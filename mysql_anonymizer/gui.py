@@ -15,6 +15,7 @@ from .core import (
     init_rules,
     inspect_schema,
     load_json,
+    list_mapping_fields,
     lookup_mapping,
     migrate_identifier_rules,
     save_json_atomic,
@@ -172,12 +173,18 @@ class AnonymizerApp(tk.Tk):
         self.lookup_column = tk.StringVar()
         self.lookup_value = tk.StringVar()
         self.lookup_direction = tk.StringVar(value="original-to-anonymized")
+        self.lookup_fields_by_table: dict[str, list[str]] = {}
         form = ttk.Frame(self.lookup_tab)
         form.pack(anchor="nw", fill="x")
-        fields = (("Table", self.lookup_table), ("Column", self.lookup_column), ("Exact value", self.lookup_value))
-        for row, (label, variable) in enumerate(fields):
-            ttk.Label(form, text=label, width=18).grid(row=row, column=0, sticky="w", pady=6)
-            ttk.Entry(form, textvariable=variable, width=60).grid(row=row, column=1, sticky="ew", pady=6)
+        ttk.Label(form, text="Table", width=18).grid(row=0, column=0, sticky="w", pady=6)
+        self.lookup_table_box = ttk.Combobox(form, textvariable=self.lookup_table, state="readonly", width=58)
+        self.lookup_table_box.grid(row=0, column=1, sticky="ew", pady=6)
+        self.lookup_table_box.bind("<<ComboboxSelected>>", self._lookup_table_selected)
+        ttk.Label(form, text="Column", width=18).grid(row=1, column=0, sticky="w", pady=6)
+        self.lookup_column_box = ttk.Combobox(form, textvariable=self.lookup_column, state="readonly", width=58)
+        self.lookup_column_box.grid(row=1, column=1, sticky="ew", pady=6)
+        ttk.Label(form, text="Exact value", width=18).grid(row=2, column=0, sticky="w", pady=6)
+        ttk.Entry(form, textvariable=self.lookup_value, width=60).grid(row=2, column=1, sticky="ew", pady=6)
         ttk.Label(form, text="Direction", width=18).grid(row=3, column=0, sticky="nw", pady=6)
         directions = ttk.Frame(form)
         directions.grid(row=3, column=1, sticky="w", pady=6)
@@ -186,7 +193,11 @@ class AnonymizerApp(tk.Tk):
         ttk.Radiobutton(directions, text="Anonymized → original", value="anonymized-to-original",
                         variable=self.lookup_direction).pack(anchor="w")
         form.columnconfigure(1, weight=1)
-        ttk.Button(form, text="Find mapping", command=self._lookup).grid(row=4, column=1, sticky="w", pady=(10, 0))
+        lookup_buttons = ttk.Frame(form)
+        lookup_buttons.grid(row=4, column=1, sticky="w", pady=(10, 0))
+        self.lookup_fields_button = ttk.Button(lookup_buttons, text="Load fields", command=self._load_lookup_fields)
+        self.lookup_fields_button.pack(side="left")
+        ttk.Button(lookup_buttons, text="Find mapping", command=self._lookup).pack(side="left", padx=(8, 0))
         ttk.Label(self.lookup_tab,
                   text="Uses the SQLite mapping store selected above. Search is exact and may return multiple values.",
                   wraplength=760).pack(anchor="w", pady=(16, 0))
@@ -333,6 +344,23 @@ class AnonymizerApp(tk.Tk):
         )
         if path:
             self.mapping_path.set(path)
+            self._load_lookup_fields()
+
+    def _load_lookup_fields(self) -> None:
+        path = self.mapping_path.get().strip()
+        if not path:
+            messagebox.showinfo("Select mapping store", "Choose the SQLite mapping store first.")
+            return
+        self._run_async("Loading mapping tables and columns…", self._lookup_fields_worker, path)
+
+    def _lookup_fields_worker(self, path: str) -> None:
+        fields = list_mapping_fields(path)
+        self.messages.put(("lookup_fields", fields))
+
+    def _lookup_table_selected(self, _event=None) -> None:
+        columns = self.lookup_fields_by_table.get(self.lookup_table.get(), [])
+        self.lookup_column_box.configure(values=columns)
+        self.lookup_column.set(columns[0] if columns else "")
 
     def _load_config(self) -> None:
         try:
@@ -480,7 +508,7 @@ class AnonymizerApp(tk.Tk):
             messagebox.showinfo("Select mapping store", "Choose the SQLite mapping store in the field above.")
             return
         if not table or not column:
-            messagebox.showinfo("Complete lookup fields", "Enter a table and column to search.")
+            messagebox.showinfo("Complete lookup fields", "Select a table and column to search.")
             return
         self._run_async("Searching mapping store…", self._lookup_worker, path, table, column,
                         value, self.lookup_direction.get())
@@ -507,6 +535,8 @@ class AnonymizerApp(tk.Tk):
                 mapping_path, selected, include_dependencies,
                 lambda progress: self.messages.put(("progress", progress)),
             )
+            if mapping_path:
+                self.messages.put(("lookup_fields", list_mapping_fields(mapping_path)))
             copied = set(counts)
             not_copied = [table["name"] for table in tables if table["name"] not in copied]
             report = ["Copy complete.", "Copied tables:"]
@@ -581,6 +611,13 @@ class AnonymizerApp(tk.Tk):
                 else:
                     report = [f"No matching value found for {table}.{column} = {value!r}."]
                 self._log("\n".join(report))
+            elif kind == "lookup_fields":
+                self.lookup_fields_by_table = value
+                tables = list(value)
+                self.lookup_table_box.configure(values=tables)
+                self.lookup_table.set(tables[0] if tables else "")
+                self._lookup_table_selected()
+                self._log(f"Loaded {len(tables)} mapped table(s) and their columns.")
             elif kind == "error":
                 self.status.set("Operation failed.")
                 self._log("Error: " + value)
@@ -597,7 +634,8 @@ class AnonymizerApp(tk.Tk):
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
         for widget in (self.save_config_button, self.inspect_button, self.test_connections_button,
-                       self.copy_button, self.browse_tables_button, self.browse_search_button):
+                       self.copy_button, self.browse_tables_button, self.browse_search_button,
+                       self.lookup_fields_button):
             widget.configure(state=state)
 
     def _clear_browse_rows(self) -> None:

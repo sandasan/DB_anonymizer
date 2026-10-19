@@ -245,6 +245,17 @@ def lookup_mapping(path: str, table: str, column: str, value: str,
         return [row[0] for row in db.execute(sql, params)]
 
 
+def list_mapping_fields(path: str) -> dict[str, list[str]]:
+    """Return the tables and columns recorded in an existing mapping store."""
+    fields: dict[str, list[str]] = {}
+    with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        for table, column in db.execute(
+            "SELECT DISTINCT table_name, column_name FROM mappings ORDER BY table_name, column_name"
+        ):
+            fields.setdefault(table, []).append(column)
+    return fields
+
+
 def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
     existing = {t["name"]: t for t in tables}
     for tn, config in rules.get("tables", {}).items():
