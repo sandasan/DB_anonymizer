@@ -10,6 +10,8 @@ from typing import Any
 
 import mysql.connector
 
+TEXT_DATA_TYPES = {"char", "varchar", "tinytext", "text", "mediumtext", "longtext"}
+
 
 def load_json(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
@@ -92,6 +94,7 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
         preserve, anonymize = [], {}
         for c in table["columns"]:
             name, low = c["COLUMN_NAME"], c["COLUMN_NAME"].lower()
+            is_text = c["DATA_TYPE"].lower() in TEXT_DATA_TYPES
             is_identifier = c["COLUMN_KEY"] == "PRI" or low.endswith("_id") or low == "id"
             if is_identifier:
                 preserve.append(name)
@@ -100,11 +103,11 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
             elif is_identifier:
                 # Keep keys and foreign-key columns unchanged to retain relationships.
                 continue
-            elif re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", low):
+            elif is_text and re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", low):
                 anonymize[name] = {"type": "phone"}
-            elif re.search(r"first.?name|last.?name|full.?name|^name$", low):
+            elif is_text and re.search(r"first.?name|last.?name|full.?name|^name$", low):
                 anonymize[name] = {"type": "name"}
-            elif re.search(r"address|street|city|postal|zip", low):
+            elif is_text and re.search(r"address|street|city|postal|zip", low):
                 anonymize[name] = {"type": "address"}
         rules["tables"][table["name"]] = {"preserve": sorted(set(preserve)), "anonymize": anonymize}
     return rules
@@ -190,8 +193,13 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"{tn}.{col} is in both preserve and anonymize; remove it from anonymize")
             if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|email", col, re.I):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
+            if rule.get("type") in {"email", "phone", "name", "address", "unique"} and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
+                raise ValueError(
+                    f"Text transformation {rule.get('type')!r} configured for non-text column "
+                    f"{tn}.{col} ({cols[col]['COLUMN_TYPE']}); preserve it or choose a compatible rule"
+                )
             if cols[col]["COLUMN_KEY"] == "UNI":
-                if cols[col]["DATA_TYPE"].lower() not in {"char", "varchar", "tinytext", "text", "mediumtext", "longtext"}:
+                if cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                     raise ValueError(f"Unique non-text column {tn}.{col} requires an application-specific transformation")
                 if rule.get("type") not in {"email", "phone", "name", "address", "unique"}:
                     raise ValueError(f"Unique text column {tn}.{col} requires a text transformation such as name or unique")
@@ -262,7 +270,34 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                                                         mapping, used)
                             values[i] = new_value
                     output.append(tuple(values))
-                dst.executemany(insert, output)
+                try:
+                    dst.executemany(insert, output)
+                except mysql.connector.Error as exc:
+                    first_row = count + 1
+                    last_row = count + len(output)
+                    details = []
+                    error_text = str(exc)
+                    row_match = re.search(r"\bat row (\d+)\b", error_text, re.I)
+                    column_match = re.search(r"\bcolumn ['`\"]([^'`\"]+)['`\"]", error_text, re.I)
+                    if row_match:
+                        failed_index = int(row_match.group(1)) - 1
+                        if 0 <= failed_index < len(output):
+                            failed_values = output[failed_index]
+                            details.append(f"source row {first_row + failed_index}")
+                            primary_key = [c["COLUMN_NAME"] for c in cols if c["COLUMN_KEY"] == "PRI"]
+                            if primary_key:
+                                key_values = {
+                                    key: failed_values[names.index(key)] for key in primary_key
+                                }
+                                details.append(f"primary key {key_values!r}")
+                            if column_match and column_match.group(1) in column_info:
+                                col = column_match.group(1)
+                                details.append(f"{col} value {failed_values[names.index(col)]!r}")
+                    pinpointed = f" ({', '.join(details)})" if details else ""
+                    raise RuntimeError(
+                        f"Failed copying table {name!r}, source rows {first_row}-{last_row}"
+                        f"{pinpointed}: {exc}"
+                    ) from exc
                 count += len(output)
             counts[name] = count
         destination.commit()
