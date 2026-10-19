@@ -13,6 +13,7 @@ from typing import Any
 
 from .cli import check_config
 from .core import (
+    CopyPaused,
     connect,
     copy_database,
     init_rules,
@@ -66,6 +67,10 @@ class AnonymizerApp(tk.Tk):
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
         self.copy_started_at: float | None = None
+        self.pause_event: threading.Event | None = None
+        self.copy_in_progress = False
+        self.close_when_paused = False
+        self.copy_resume_state: dict[str, Any] | None = None
 
         self.config_path = tk.StringVar(value="config.json")
         self.rules_path = tk.StringVar(value="rules.json")
@@ -78,6 +83,7 @@ class AnonymizerApp(tk.Tk):
         self._build_ui()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_messages)
+        self.after(250, self._offer_resume_copy)
 
     @staticmethod
     def _state_file() -> Path:
@@ -117,8 +123,66 @@ class AnonymizerApp(tk.Tk):
             self._log(f"Could not remember config and rules paths: {exc}")
 
     def _on_close(self) -> None:
+        if self.copy_in_progress:
+            self.close_when_paused = True
+            if self.pause_event is not None:
+                self.pause_event.set()
+            self.status.set("Pausing at the next batch boundary; the app will close when the checkpoint is saved…")
+            return
         self._save_last_paths()
         self.destroy()
+
+    @classmethod
+    def _resume_copy_path(cls) -> Path:
+        return cls._state_file().with_name("copy_resume.json")
+
+    def _save_copy_checkpoint(self, state: dict[str, Any]) -> None:
+        path = self._resume_copy_path()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        save_json_atomic(str(path), state)
+        path.chmod(0o600)
+
+    def _offer_resume_copy(self) -> None:
+        path = self._resume_copy_path()
+        try:
+            state = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict) or state.get("version") != 1:
+                return
+        except (OSError, json.JSONDecodeError):
+            return
+        self.copy_resume_state = state
+        self.copy_button.configure(state="disabled")
+        self.pause_button.configure(text="Resume copy", state="normal")
+        if messagebox.askyesno(
+            "Resume paused copy?",
+            "A copy was paused or interrupted. Resume it using the saved connection and rule settings? "
+            "Any partially copied table will be cleared and copied again; completed tables are kept. "
+            "The checkpoint contains credentials and is stored with owner-only file permissions.",
+        ):
+            self._resume_copy()
+
+    def _resume_copy(self) -> None:
+        state = self.copy_resume_state
+        if not state or self.busy:
+            return
+        self.pause_event = threading.Event()
+        self.copy_in_progress = True
+        self.copy_button.configure(state="disabled")
+        self.pause_button.configure(text="Pause copy", state="normal")
+        self.mapping_path.set(state.get("mapping_path") or "")
+        self._run_async("Resuming copy…", self._copy_worker,
+                        state["config"], state["rules"], state["selected"],
+                        state.get("mapping_path"), state.get("rules_path"),
+                        state.get("allow_locks", False), state.get("include_dependencies", False),
+                        state, self.pause_event)
+
+    def _request_pause(self) -> None:
+        if self.copy_in_progress and self.pause_event is not None:
+            self.pause_event.set()
+            self.pause_button.configure(state="disabled")
+            self.status.set("Pausing after the current batch is safely saved…")
+        elif self.copy_resume_state is not None:
+            self._resume_copy()
 
     def _build_ui(self) -> None:
         paths = ttk.Frame(self, padding=(12, 12, 12, 4))
@@ -137,6 +201,8 @@ class AnonymizerApp(tk.Tk):
         self.test_connections_button.pack(side="left")
         self.copy_button = ttk.Button(actions, text="Copy selected tables", command=self._copy)
         self.copy_button.pack(side="right")
+        self.pause_button = ttk.Button(actions, text="Pause copy", command=self._request_pause, state="disabled")
+        self.pause_button.pack(side="right", padx=(0, 8))
 
         progress_panel = ttk.Frame(self, padding=(12, 0, 12, 4))
         progress_panel.pack(fill="x")
@@ -773,6 +839,9 @@ class AnonymizerApp(tk.Tk):
         self.messages.put(("tables", (tables, destination_tables)))
 
     def _copy(self) -> None:
+        if self.copy_resume_state is not None:
+            messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before starting another one.")
+            return
         if not self.tables:
             messagebox.showinfo("Inspect source first", "Inspect the source database before copying.")
             return
@@ -818,8 +887,25 @@ class AnonymizerApp(tk.Tk):
             rules_path = None if stale_rules else self.rules_path.get()
             allow_locks = self.allow_locks.get()
             include_dependencies = self.include_dependencies.get()
+            state = {
+                "version": 1,
+                "config": config,
+                "rules": rules,
+                "selected": selected,
+                "mapping_path": mapping_path,
+                "rules_path": rules_path,
+                "allow_locks": allow_locks,
+                "include_dependencies": include_dependencies,
+                "completed_counts": {},
+            }
+            self._save_copy_checkpoint(state)
+            self.copy_resume_state = state
+            self.pause_event = threading.Event()
+            self.copy_in_progress = True
+            self.pause_button.configure(text="Pause copy", state="normal")
             self._run_async("Copying selected tables…", self._copy_worker, config, rules, selected,
-                            mapping_path, rules_path, allow_locks, include_dependencies)
+                            mapping_path, rules_path, allow_locks, include_dependencies,
+                            state, self.pause_event)
         except Exception as exc:
             messagebox.showerror("Could not start copy", str(exc))
 
@@ -893,7 +979,8 @@ class AnonymizerApp(tk.Tk):
 
     def _copy_worker(self, config: dict[str, Any], rules: dict[str, Any], selected: list[str],
                      mapping_path: str | None, rules_path: str | None, allow_locks: bool,
-                     include_dependencies: bool) -> None:
+                     include_dependencies: bool, resume_state: dict[str, Any],
+                     pause_event: threading.Event) -> None:
         source = connect_with_guidance("source", config["source"])
         destination = None
         try:
@@ -905,12 +992,40 @@ class AnonymizerApp(tk.Tk):
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
             destination = connect_with_guidance("destination", config["destination"])
             self.messages.put(("progress", {"event": "copy_started"}))
-            counts = copy_database(
-                source, destination, config["source"]["database"], rules,
-                config.get("batch_size", 500), allow_locks,
-                mapping_path, selected, include_dependencies,
-                lambda progress: self.messages.put(("progress", progress)),
-            )
+
+            def report_progress(progress: dict[str, Any]) -> None:
+                if progress.get("event") == "start" and not resume_state.get("is_resume"):
+                    # The collision check has passed. From this point, any destination
+                    # tables found after an interruption belong to this copy job.
+                    resume_state["is_resume"] = True
+                    resume_state["selected"] = progress.get("selected_tables", selected)
+                    self._save_copy_checkpoint(resume_state)
+                elif progress.get("event") == "table_done":
+                    completed = dict(resume_state.get("completed_counts", {}))
+                    completed[progress["table"]] = progress["copied_rows"]
+                    resume_state["completed_counts"] = completed
+                    self._save_copy_checkpoint(resume_state)
+                self.messages.put(("progress", progress))
+
+            try:
+                counts = copy_database(
+                    source, destination, config["source"]["database"], rules,
+                    config.get("batch_size", 500), allow_locks,
+                    mapping_path, selected, include_dependencies,
+                    report_progress,
+                    resume_state.get("completed_counts", {}), pause_event,
+                    bool(resume_state.get("is_resume", False)),
+                )
+            except CopyPaused as paused:
+                resume_state["completed_counts"] = paused.completed_counts
+                resume_state["selected"] = paused.selected_tables
+                resume_state["is_resume"] = True
+                resume_state["paused_table"] = paused.current_table
+                self._save_copy_checkpoint(resume_state)
+                self.messages.put(("copy_paused", resume_state))
+                return
+            self._resume_copy_path().unlink(missing_ok=True)
+            self.messages.put(("copy_completed", None))
             self.messages.put(("progress", {"event": "copy_finished"}))
             if mapping_path:
                 self.messages.put(("lookup_fields", list_mapping_fields(mapping_path)))
@@ -963,6 +1078,16 @@ class AnonymizerApp(tk.Tk):
                 self._log(value)
             elif kind == "progress":
                 self._show_progress(value)
+            elif kind == "copy_paused":
+                self.copy_in_progress = False
+                self.copy_resume_state = value
+                self.pause_button.configure(text="Resume copy")
+                self.status.set("Copy paused and saved. Resume it here or close the app and resume next time.")
+            elif kind == "copy_completed":
+                self.copy_in_progress = False
+                self.copy_resume_state = None
+                self.pause_event = None
+                self.pause_button.configure(text="Pause copy", state="disabled")
             elif kind == "browse_tables":
                 role, tables = value
                 self.browse_tables_by_role[role] = tables
@@ -998,6 +1123,17 @@ class AnonymizerApp(tk.Tk):
                 self._lookup_table_selected()
                 self._log(f"Loaded {len(tables)} mapped table(s) and their columns.")
             elif kind == "error":
+                if self.copy_in_progress:
+                    self.copy_in_progress = False
+                    if self.copy_resume_state is not None and self.copy_resume_state.get("is_resume"):
+                        self.pause_button.configure(text="Resume copy")
+                    else:
+                        try:
+                            self._resume_copy_path().unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        self.copy_resume_state = None
+                        self.pause_button.configure(text="Pause copy", state="disabled")
                 if self.copy_started_at is not None:
                     elapsed = time.monotonic() - self.copy_started_at
                     self.status.set(f"Operation failed after {self._format_duration(elapsed)}.")
@@ -1007,11 +1143,14 @@ class AnonymizerApp(tk.Tk):
                 self._log("Error: " + value)
                 messagebox.showerror("Operation failed", value)
             elif kind == "done":
-                if not self.status.get().startswith(("Showing ", "Copy complete.")):
+                if not self.status.get().startswith(("Showing ", "Copy complete.", "Copy paused")):
                     self.status.set("Ready.")
             if kind in {"error", "done"}:
                 self.busy = False
                 self._set_busy(False)
+                if kind == "done" and self.close_when_paused and not self.copy_in_progress:
+                    self.after_idle(self._on_close)
+                    return
         self.after(100, self._poll_messages)
 
     def _set_busy(self, busy: bool) -> None:
@@ -1020,6 +1159,14 @@ class AnonymizerApp(tk.Tk):
                        self.copy_button, self.browse_tables_button, self.browse_search_button,
                        self.lookup_fields_button):
             widget.configure(state=state)
+        self.copy_button.configure(state="disabled" if self.copy_resume_state is not None else state)
+        if self.busy:
+            self.pause_button.configure(state="normal" if self.copy_in_progress else "disabled")
+        else:
+            self.pause_button.configure(
+                state="normal" if self.copy_resume_state is not None else "disabled",
+                text="Resume copy" if self.copy_resume_state is not None else "Pause copy",
+            )
 
     def _clear_browse_rows(self) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
@@ -1073,10 +1220,13 @@ class AnonymizerApp(tk.Tk):
         total_rows = progress.get("total_rows", 0)
         total_tables = progress.get("total_tables", 0)
         if event == "start":
-            self.overall_progress.configure(maximum=max(total_tables, 1), value=0)
+            completed_tables = progress.get("completed_tables", 0)
+            completed_rows = progress.get("completed_rows", 0)
+            self.overall_progress.configure(maximum=max(total_tables, 1), value=completed_tables)
             self.table_progress.configure(maximum=1, value=0)
             self.status.set(self._progress_status(
-                f"Preparing {total_tables} table(s), {total_rows} row(s)", 0, total_rows, 0, total_tables,
+                f"Preparing {total_tables} table(s), {total_rows} row(s)",
+                completed_rows, total_rows, completed_tables, total_tables,
             ))
             return
         table = progress.get("table", "")

@@ -48,8 +48,8 @@ Run the following SQL in the MySQL prompt:
 -- Create a local account for the anonymizer to create and populate tables
 CREATE USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';
 
--- Allow table creation, row insertion, indexes, and foreign key references
-GRANT CREATE, INSERT, INDEX, REFERENCES ON `development_database`.* TO 'anonymizer_writer'@'localhost';
+-- Allow table creation, row insertion, indexes, foreign keys, and clearing a partial table on resume
+GRANT CREATE, INSERT, DELETE, INDEX, REFERENCES ON `development_database`.* TO 'anonymizer_writer'@'localhost';
 
 -- Confirm the account's privileges
 SHOW GRANTS FOR 'anonymizer_writer'@'localhost';
@@ -87,7 +87,7 @@ CREATE USER 'anonymizer_readonly'@'%' IDENTIFIED BY 'choose-a-source-password';
 GRANT SELECT, SHOW VIEW ON `source_database`.* TO 'anonymizer_readonly'@'%';
 
 CREATE USER 'anonymizer_writer'@'%' IDENTIFIED BY 'choose-a-destination-password';
-GRANT CREATE, INSERT, INDEX, REFERENCES ON `anonymized_copy`.* TO 'anonymizer_writer'@'%';
+GRANT CREATE, INSERT, DELETE, INDEX, REFERENCES ON `anonymized_copy`.* TO 'anonymizer_writer'@'%';
 ```
 
 If `allow_source_table_locks` is enabled for non-InnoDB tables, also grant:
@@ -121,7 +121,7 @@ If you have not installed the project in that environment yet, run `python -m pi
 
 On Linux, you can also double-click `mysql-anonymizer.desktop` in the project folder. If the desktop asks, choose **Allow Launching** or **Trust and Launch**. This launcher expects the project at `/home/alexander/projects/DB_anonymizer`; if you move the folder, update the `Exec` and `Path` entries in the `.desktop` file. The `launch-gui.sh` script can also be run directly from the file manager after marking it as executable.
 
-The window lets you load connection settings and rules, inspect the source, select tables, include foreign-key dependencies, edit or generate anonymization rules, start the copy, browse source or destination table data, and search mapping values in either direction. During a copy, **Overall copy progress** tracks completion across all selected tables, including progress through the current table, and **Current table** tracks rows copied in that table. The status line shows elapsed time and an estimated time remaining, then the total copy duration when finished. The **Anonymization rules** tab includes a searchable column navigator with table and rule-status filters; double-click a row to jump to its rule in the JSON editor. It shows unconfigured columns and rules that refer to missing source fields. In the **Tables** tab, a green check marks tables already present in the destination. Use **Load config…** and **Load rules…** to open existing JSON files; use **Save config as…** and **Save rules as…** to write the current settings or rules to new files. The **Save config** and **Save rules** actions update the selected files. The GUI remembers the last loaded config and rules paths and opens those files at startup when they still exist. The **Browse data** tab can search across all columns or filter within one selected column, and displays up to 200 matching rows. Use **Test connections** to check both database accounts before copying. If MySQL rejects authentication, the GUI identifies the source or destination account and suggests checking its username, host, password, and grants. MySQL error 1045 cannot distinguish a missing account from a wrong password or a host mismatch. Passwords entered in the window are saved in the config file in plain text and are loaded back into the password fields. Leave a password field blank to use the configured `password_env` variable. If a selected table's rules refer to columns missing from the inspected source, the GUI asks before ignoring those stale entries for that copy; columns without a rule are copied unchanged. Existing destination tables are allowed as long as their names do not collide with the tables being copied; referenced tables may already exist in the destination.
+The window lets you load connection settings and rules, inspect the source, select tables, include foreign-key dependencies, edit or generate anonymization rules, start the copy, browse source or destination table data, and search mapping values in either direction. During a copy, **Overall copy progress** tracks completion across all selected tables, including progress through the current table, and **Current table** tracks rows copied in that table. Use **Pause copy** to save a checkpoint at the next batch boundary. Closing the window during a copy also pauses it safely; the next launch offers to resume. A resumed copy keeps completed tables and clears and recopies the interrupted table. Resuming starts a new source snapshot, so changes made to source data while the app is closed may be included. The checkpoint is stored in the app's user configuration directory with owner-only permissions and includes connection settings, including any password entered in the GUI. The status line shows elapsed time and an estimated time remaining, then the total copy duration when finished. The **Anonymization rules** tab includes a searchable column navigator with table and rule-status filters; double-click a row to jump to its rule in the JSON editor. It shows unconfigured columns and rules that refer to missing source fields. In the **Tables** tab, a green check marks tables already present in the destination. Use **Load config…** and **Load rules…** to open existing JSON files; use **Save config as…** and **Save rules as…** to write the current settings or rules to new files. The **Save config** and **Save rules** actions update the selected files. The GUI remembers the last loaded config and rules paths and opens those files at startup when they still exist. The **Browse data** tab can search across all columns or filter within one selected column, and displays up to 200 matching rows. Use **Test connections** to check both database accounts before copying. If MySQL rejects authentication, the GUI identifies the source or destination account and suggests checking its username, host, password, and grants. MySQL error 1045 cannot distinguish a missing account from a wrong password or a host mismatch. Passwords entered in the window are saved in the config file in plain text and are loaded back into the password fields. Leave a password field blank to use the configured `password_env` variable. If a selected table's rules refer to columns missing from the inspected source, the GUI asks before ignoring those stale entries for that copy; columns without a rule are copied unchanged. Existing destination tables are allowed as long as their names do not collide with the tables being copied; referenced tables may already exist in the destination.
 
 For GUI lookups, choose or create a mapping store at the top of the window and copy data with that path selected. If no mapping store is selected, the GUI warns that the copy will not save mappings and asks whether to continue. Open the **Lookup** tab and use **Load fields** to populate the table and column dropdowns from the store. Choose a table and column, enter the exact value, then choose original-to-anonymized or anonymized-to-original. The search uses the mapping store and may return multiple matches. The dropdowns refresh after a copy when a mapping store is selected.
 
@@ -209,7 +209,7 @@ The source should be accessed through a read-only account; the destination user 
 
 ### Recover after a failed copy
 
-A failed copy may leave some or all tables in the destination. MySQL commits table creation separately, so rolling back inserted rows does not necessarily remove the created tables. A later run can copy other tables, but will stop if a requested table name already exists in the destination.
+A failed or paused copy may leave some or all tables and committed batches in the destination. If a GUI checkpoint exists, resume it to keep completed tables and recopy the interrupted table. Without a checkpoint, use a new empty destination or follow the recovery steps below before retrying.
 
 The safest recovery is to create a new, empty destination schema and change `destination.database` in `config.json` to that schema. Grant the destination user access to the new schema as described above.
 
@@ -221,7 +221,7 @@ DROP DATABASE `development_database`;
 CREATE DATABASE `development_database`;
 ```
 
-If the destination user loses access after recreating the schema, reapply its `GRANT CREATE, INSERT, INDEX, REFERENCES` statement. Then check that the destination is empty before retrying:
+If the destination user loses access after recreating the schema, reapply its `GRANT CREATE, INSERT, DELETE, INDEX, REFERENCES` statement. `DELETE` is used to clear a partially copied table when resuming a paused GUI copy. Then check that the destination is empty before retrying:
 
 ```sql
 SELECT TABLE_NAME

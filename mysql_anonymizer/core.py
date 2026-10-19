@@ -15,6 +15,17 @@ import mysql.connector
 TEXT_DATA_TYPES = {"char", "varchar", "tinytext", "text", "mediumtext", "longtext"}
 
 
+class CopyPaused(Exception):
+    """Raised at a committed batch boundary when a copy is paused."""
+
+    def __init__(self, completed_counts: dict[str, int], current_table: str | None,
+                 selected_tables: list[str]):
+        super().__init__("Copy paused")
+        self.completed_counts = dict(completed_counts)
+        self.current_table = current_table
+        self.selected_tables = list(selected_tables)
+
+
 def load_json(path: str) -> dict[str, Any]:
     with open(path, encoding="utf-8") as f:
         obj = json.load(f)
@@ -326,7 +337,10 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                   allow_source_table_locks: bool = False, mapping_store: str | None = None,
                   selected_tables: list[str] | None = None,
                   include_dependencies: bool = False,
-                  progress_callback: Callable[[dict[str, Any]], None] | None = None) -> dict[str, int]:
+                  progress_callback: Callable[[dict[str, Any]], None] | None = None,
+                  completed_counts: dict[str, int] | None = None,
+                  pause_event=None,
+                  resume: bool = False) -> dict[str, int]:
     all_tables = inspect_schema(source, schema)
     dst_check = destination.cursor()
     dst_check.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()")
@@ -335,7 +349,12 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     selected_names = set(resolve_table_selection(
         all_tables, selected_tables, include_dependencies, existing_destination_tables))
     tables = [table for table in all_tables if table["name"] in selected_names]
-    collisions = sorted(selected_names & existing_destination_tables)
+    completed_counts = dict(completed_counts or {})
+    completed_names = set(completed_counts)
+    missing_completed = sorted(completed_names - existing_destination_tables)
+    if missing_completed:
+        raise ValueError("Resume checkpoint tables are missing from destination: " + ", ".join(missing_completed))
+    collisions = sorted((selected_names & existing_destination_tables) - completed_names) if not resume else []
     if collisions:
         raise ValueError("Destination already contains selected table(s): " + ", ".join(collisions)
                          + ". Remove or rename them before copying")
@@ -345,7 +364,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         raise ValueError(f"Non-InnoDB source tables found ({names}). Set allow_source_table_locks=true only if it is acceptable to block writes to all source tables during the copy")
     validate_rules(tables, rules)
     dst, src = destination.cursor(), source.cursor()
-    counts: dict[str, int] = {}
+    counts: dict[str, int] = completed_counts
     mapping_db = open_mapping_store(mapping_store) if mapping_store else None
     source_locked = False
     try:
@@ -365,10 +384,14 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             row_totals[table["name"]] = src.fetchone()[0]
         total_rows = sum(row_totals.values())
         if progress_callback:
-            progress_callback({"event": "start", "total_tables": len(tables), "total_rows": total_rows})
+            progress_callback({"event": "start", "total_tables": len(tables), "total_rows": total_rows,
+                               "selected_tables": [table["name"] for table in tables],
+                               "completed_tables": len(counts), "completed_rows": sum(counts.values())})
         dst.execute("SET FOREIGN_KEY_CHECKS=0")
         for t in tables:
             name = t["name"]
+            if name in existing_destination_tables:
+                continue
             src.execute(f"SHOW CREATE TABLE {qname(schema, name)}")
             ddl = src.fetchone()[1]
             quoted = name.replace("`", "``")
@@ -376,9 +399,16 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             dst.execute(ddl)
         for t in tables:
             name = t["name"]
+            if name in completed_names:
+                continue
+            if name in existing_destination_tables:
+                # This table was only partly copied before the checkpoint. Restart it
+                # from row one so the destination cannot contain duplicate batches.
+                dst.execute(f"DELETE FROM `{name.replace('`', '``')}`")
+                destination.commit()
             if progress_callback:
                 progress_callback({"event": "table", "table": name,
-                                   "table_index": len(counts) + 1, "total_tables": len(tables),
+                                   "table_index": tables.index(t) + 1, "total_tables": len(tables),
                                    "table_rows": row_totals[name], "copied_rows": 0,
                                    "total_rows": total_rows, "completed_rows": sum(counts.values())})
             cols = [c for c in t["columns"] if "GENERATED" not in c["EXTRA"].upper()]
@@ -447,13 +477,23 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                         f"{pinpointed}: {exc}"
                     ) from exc
                 count += len(output)
+                # Persist each batch so a graceful pause or application restart can
+                # continue from a durable checkpoint.
+                destination.commit()
+                if mapping_db is not None:
+                    mapping_db.commit()
                 if progress_callback:
                     progress_callback({"event": "batch", "table": name,
-                                       "table_index": len(counts) + 1, "total_tables": len(tables),
+                                       "table_index": tables.index(t) + 1, "total_tables": len(tables),
                                        "table_rows": row_totals[name], "copied_rows": count,
                                        "total_rows": total_rows,
                                        "completed_rows": sum(counts.values()) + count})
+                if pause_event is not None and pause_event.is_set() and count < row_totals[name]:
+                    raise CopyPaused(counts, name, [table["name"] for table in tables])
             counts[name] = count
+            destination.commit()
+            if mapping_db is not None:
+                mapping_db.commit()
             if progress_callback:
                 progress_callback({"event": "table_done", "table": name,
                                    "table_index": len(counts), "total_tables": len(tables),
@@ -461,6 +501,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                                    "total_rows": total_rows,
                                    "completed_rows": sum(counts.values()),
                                    "completed_tables": len(counts)})
+            if pause_event is not None and pause_event.is_set() and len(counts) < len(tables):
+                raise CopyPaused(counts, None, [table["name"] for table in tables])
         destination.commit()
         if mapping_db is not None:
             mapping_db.commit()
