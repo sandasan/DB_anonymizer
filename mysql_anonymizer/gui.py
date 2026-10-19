@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -58,18 +60,62 @@ class AnonymizerApp(tk.Tk):
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
         self.copied_table_names: set[str] = set()
+        self.source_inspected = False
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
 
         self.config_path = tk.StringVar(value="config.json")
         self.rules_path = tk.StringVar(value="rules.json")
+        self._load_last_paths()
         self.mapping_path = tk.StringVar()
         self.allow_locks = tk.BooleanVar(value=False)
         self.include_dependencies = tk.BooleanVar(value=False)
         self.connection_fields: dict[str, dict[str, tk.StringVar]] = {}
         self.password_fields: dict[str, tk.StringVar] = {}
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_messages)
+
+    @staticmethod
+    def _state_file() -> Path:
+        if os.name == "nt":
+            config_root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        elif sys.platform == "darwin":
+            config_root = Path.home() / "Library" / "Application Support"
+        else:
+            config_root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        return config_root / "mysql-anonymized-copy" / "gui_state.json"
+
+    def _load_last_paths(self) -> None:
+        try:
+            state = json.loads(self._state_file().read_text(encoding="utf-8"))
+            config_path = state.get("config_path")
+            rules_path = state.get("rules_path")
+            if isinstance(config_path, str) and config_path:
+                self.config_path.set(config_path)
+            if isinstance(rules_path, str) and rules_path:
+                self.rules_path.set(rules_path)
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+
+    def _save_last_paths(self) -> None:
+        path = self._state_file()
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "config_path": self.config_path.get(),
+                "rules_path": self.rules_path.get(),
+            }, indent=2) + "\n", encoding="utf-8")
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass
+        except OSError as exc:
+            self._log(f"Could not remember config and rules paths: {exc}")
+
+    def _on_close(self) -> None:
+        self._save_last_paths()
+        self.destroy()
 
     def _build_ui(self) -> None:
         paths = ttk.Frame(self, padding=(12, 12, 12, 4))
@@ -180,9 +226,188 @@ class AnonymizerApp(tk.Tk):
         ttk.Button(toolbar, text="Load rules", command=self._load_rules).pack(side="left")
         ttk.Button(toolbar, text="Generate starter rules", command=self._generate_rules).pack(side="left", padx=8)
         ttk.Button(toolbar, text="Save rules", command=self._save_rules).pack(side="left")
+
+        filters = ttk.Frame(self.rules_tab)
+        filters.pack(fill="x", pady=(0, 6))
+        ttk.Label(filters, text="Search").pack(side="left")
+        self.rules_search = tk.StringVar()
+        search_entry = ttk.Entry(filters, textvariable=self.rules_search, width=28)
+        search_entry.pack(side="left", padx=(6, 12))
+        ttk.Label(filters, text="Table").pack(side="left")
+        self.rules_table_filter = tk.StringVar(value="All tables")
+        self.rules_table_filter_box = ttk.Combobox(
+            filters, textvariable=self.rules_table_filter, state="readonly", width=22,
+            values=("All tables",),
+        )
+        self.rules_table_filter_box.pack(side="left", padx=(6, 12))
+        self.rules_table_filter_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh_rules_preview())
+        ttk.Label(filters, text="Status").pack(side="left")
+        self.rules_status_filter = tk.StringVar(value="All statuses")
+        self.rules_preview_after_id = None
+        self.rules_status_filter_box = ttk.Combobox(
+            filters, textvariable=self.rules_status_filter, state="readonly", width=18,
+            values=("All statuses", "Anonymized", "Preserved", "Unconfigured", "Needs attention"),
+        )
+        self.rules_status_filter_box.pack(side="left", padx=(6, 0))
+        self.rules_status_filter_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh_rules_preview())
+        ttk.Button(filters, text="Reset filters", command=self._reset_rules_filters).pack(side="left", padx=(8, 0))
+        self.rules_search.trace_add("write", lambda *_args: self._refresh_rules_preview())
+
+        preview_frame = ttk.Frame(self.rules_tab)
+        preview_frame.pack(fill="both", expand=True, pady=(0, 8))
+        self.rules_preview = ttk.Treeview(
+            preview_frame, columns=("table", "column", "status"), show="headings", height=8,
+        )
+        self.rules_preview.heading("table", text="Table")
+        self.rules_preview.heading("column", text="Column")
+        self.rules_preview.heading("status", text="Rule status")
+        self.rules_preview.column("table", width=180, minwidth=100)
+        self.rules_preview.column("column", width=180, minwidth=100)
+        self.rules_preview.column("status", width=220, minwidth=140)
+        preview_scroll = ttk.Scrollbar(preview_frame, orient="vertical", command=self.rules_preview.yview)
+        self.rules_preview.configure(yscrollcommand=preview_scroll.set)
+        self.rules_preview.pack(side="left", fill="both", expand=True)
+        preview_scroll.pack(side="right", fill="y")
+        self.rules_preview.bind("<Double-1>", self._rules_preview_navigate)
+        self.rules_preview_status = tk.StringVar(value="Inspect the source to compare rules with its columns.")
+        ttk.Label(self.rules_tab, textvariable=self.rules_preview_status).pack(anchor="w", pady=(0, 4))
+
         self.rules_editor = tk.Text(self.rules_tab, wrap="none", undo=True)
         self.rules_editor.pack(fill="both", expand=True)
-        ttk.Label(self.rules_tab, text="Review generated rules carefully before copying. The editor accepts the same JSON format as rules.json.").pack(anchor="w", pady=(8, 0))
+        self.rules_editor.bind("<KeyRelease>", lambda _event: self._schedule_rules_preview())
+        ttk.Label(self.rules_tab, text="Review generated rules carefully before copying. Use the navigator to find columns; edit the JSON below and save when ready.").pack(anchor="w", pady=(8, 0))
+        self._refresh_rules_preview()
+
+    def _reset_rules_filters(self) -> None:
+        self.rules_search.set("")
+        self.rules_table_filter.set("All tables")
+        self.rules_status_filter.set("All statuses")
+        self._refresh_rules_preview()
+
+    def _rules_preview_rows(self) -> tuple[list[tuple[str, str, str]], list[str]]:
+        raw = self.rules_editor.get("1.0", "end-1c").strip()
+        rules = json.loads(raw) if raw else {"tables": {}}
+        if not isinstance(rules, dict):
+            raise ValueError("Rules must be a JSON object")
+        table_rules = rules.get("tables", {})
+        if not isinstance(table_rules, dict):
+            raise ValueError("The 'tables' rules entry must be an object")
+        source_by_name = {table["name"]: table for table in self.tables}
+        table_names = sorted(set(source_by_name) | set(table_rules))
+        rows: list[tuple[str, str, str]] = []
+        for table_name in table_names:
+            table_rule = table_rules.get(table_name, {})
+            if not isinstance(table_rule, dict):
+                continue
+            preserve = table_rule.get("preserve", [])
+            anonymize = table_rule.get("anonymize", {})
+            if not isinstance(preserve, list):
+                preserve = []
+            if not isinstance(anonymize, dict):
+                anonymize = {}
+            source_table = source_by_name.get(table_name)
+            preserve_columns = {column for column in preserve if isinstance(column, str)}
+            anonymized_columns = set(anonymize)
+            if self.source_inspected:
+                source_columns = {column["COLUMN_NAME"] for column in source_table["columns"]} if source_table else set()
+            else:
+                source_columns = preserve_columns | anonymized_columns
+            columns = sorted(source_columns | preserve_columns | set(anonymize))
+            for column in columns:
+                if self.source_inspected and source_table is None:
+                    status = "Table not in source"
+                elif self.source_inspected and column not in source_columns:
+                    status = "Column not in source"
+                elif column in preserve and column in anonymize:
+                    status = "Conflict: preserve + anonymize"
+                elif column in anonymize:
+                    transform = anonymize[column]
+                    kind = transform.get("type", "unknown") if isinstance(transform, dict) else "invalid rule"
+                    status = f"Anonymized ({kind})"
+                elif column in preserve:
+                    status = "Preserved"
+                else:
+                    status = "Unconfigured"
+                rows.append((table_name, str(column), status))
+        return rows, table_names
+
+    def _refresh_rules_preview(self) -> None:
+        if not hasattr(self, "rules_preview"):
+            return
+        try:
+            rows, table_names = self._rules_preview_rows()
+        except (json.JSONDecodeError, ValueError) as exc:
+            self.rules_preview.delete(*self.rules_preview.get_children())
+            self.rules_table_filter_box.configure(values=("All tables",))
+            self.rules_table_filter.set("All tables")
+            self.rules_preview_status.set(f"Fix the rules JSON to refresh this list: {exc}")
+            return
+
+        table_values = ["All tables"] + table_names
+        self.rules_table_filter_box.configure(values=table_values)
+        if self.rules_table_filter.get() not in table_values:
+            self.rules_table_filter.set("All tables")
+        search = self.rules_search.get().casefold().strip()
+        selected_table = self.rules_table_filter.get()
+        selected_status = self.rules_status_filter.get()
+        filtered = []
+        for row in rows:
+            table_name, column_name, status = row
+            if selected_table != "All tables" and table_name != selected_table:
+                continue
+            if search and search not in " ".join(row).casefold():
+                continue
+            if selected_status == "Anonymized" and not status.startswith("Anonymized"):
+                continue
+            if selected_status == "Preserved" and status != "Preserved":
+                continue
+            if selected_status == "Unconfigured" and status != "Unconfigured":
+                continue
+            if selected_status == "Needs attention" and status not in {
+                "Column not in source", "Table not in source", "Conflict: preserve + anonymize", "Unconfigured"
+            }:
+                continue
+            filtered.append(row)
+
+        self.rules_preview.delete(*self.rules_preview.get_children())
+        for row in filtered:
+            self.rules_preview.insert("", "end", values=row)
+        self.rules_preview_status.set(f"Showing {len(filtered)} of {len(rows)} source and configured columns. Double-click a row to jump to its rule.")
+
+    def _schedule_rules_preview(self) -> None:
+        if self.rules_preview_after_id is not None:
+            self.after_cancel(self.rules_preview_after_id)
+        def refresh() -> None:
+            self.rules_preview_after_id = None
+            self._refresh_rules_preview()
+        self.rules_preview_after_id = self.after(250, refresh)
+
+    def _rules_preview_navigate(self, _event=None) -> None:
+        selected = self.rules_preview.selection()
+        if not selected:
+            return
+        table_name, column_name, _status = self.rules_preview.item(selected[0], "values")
+        lines = self.rules_editor.get("1.0", "end-1c").splitlines()
+        table_key = json.dumps(table_name, ensure_ascii=False)
+        column_key = json.dumps(column_name, ensure_ascii=False)
+        table_line = next((index for index, line in enumerate(lines)
+                           if line.strip().startswith(table_key + ":")), None)
+        target_line = table_line
+        if table_line is not None:
+            for index in range(table_line + 1, len(lines)):
+                if lines[index].startswith("    ") and not lines[index].startswith("        "):
+                    break
+                if column_key in lines[index]:
+                    target_line = index
+                    break
+        if target_line is not None:
+            index = f"{target_line + 1}.0"
+            self.rules_editor.tag_remove("rules_navigator_match", "1.0", "end")
+            self.rules_editor.tag_add("rules_navigator_match", index, f"{index} lineend")
+            self.rules_editor.tag_configure("rules_navigator_match", background="#fff1a8")
+            self.rules_editor.see(index)
+            self.rules_editor.focus_set()
+            self.after(1400, lambda: self.rules_editor.tag_remove("rules_navigator_match", "1.0", "end"))
 
     def _build_lookup(self) -> None:
         self.lookup_table = tk.StringVar()
@@ -407,7 +632,8 @@ class AnonymizerApp(tk.Tk):
                     var.set(str(settings.get(key, "127.0.0.1" if key == "host" else "3306" if key == "port" else "")))
                 self.password_fields[role].set(str(settings.get("password", "")))
             self.allow_locks.set(bool(config.get("allow_source_table_locks", False)))
-            self._log(f"Loaded config from {self.config_path.get()}. Passwords remain in the configured environment variables.")
+            self._save_last_paths()
+            self._log(f"Loaded config from {self.config_path.get()}.")
         except Exception as exc:
             messagebox.showerror("Could not load config", str(exc))
 
@@ -438,6 +664,7 @@ class AnonymizerApp(tk.Tk):
                 json.dump(config, f, indent=2)
                 f.write("\n")
             self._log(f"Saved connection settings and entered passwords to {self.config_path.get()}.")
+            self._save_last_paths()
         except Exception as exc:
             messagebox.showerror("Could not save config", str(exc))
 
@@ -445,6 +672,7 @@ class AnonymizerApp(tk.Tk):
         try:
             rules = load_json(self.rules_path.get())
             self._set_rules_text(json.dumps(rules, indent=2, ensure_ascii=False))
+            self._save_last_paths()
             self._log(f"Loaded rules from {self.rules_path.get()}.")
         except Exception as exc:
             messagebox.showerror("Could not load rules", str(exc))
@@ -464,12 +692,14 @@ class AnonymizerApp(tk.Tk):
                 raise ValueError("Rules file must contain a JSON object")
             save_json_atomic(self.rules_path.get(), rules)
             self._log(f"Saved rules to {self.rules_path.get()}.")
+            self._save_last_paths()
         except Exception as exc:
             messagebox.showerror("Could not save rules", str(exc))
 
     def _set_rules_text(self, value: str) -> None:
         self.rules_editor.delete("1.0", "end")
         self.rules_editor.insert("1.0", value)
+        self._refresh_rules_preview()
 
     def _inspect(self) -> None:
         try:
@@ -650,7 +880,9 @@ class AnonymizerApp(tk.Tk):
             if kind == "tables":
                 self.tables, self.copied_table_names = value
                 self.table_names = [table["name"] for table in self.tables]
+                self.source_inspected = True
                 self._render_source_tables()
+                self._refresh_rules_preview()
                 self._log(f"Found {len(self.tables)} source tables.")
             elif kind == "copied_tables":
                 self.copied_table_names.update(value)
