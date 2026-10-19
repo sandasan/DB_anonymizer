@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import queue
 import threading
 import tkinter as tk
@@ -16,6 +15,7 @@ from .core import (
     init_rules,
     inspect_schema,
     load_json,
+    lookup_mapping,
     migrate_identifier_rules,
     save_json_atomic,
 )
@@ -80,12 +80,15 @@ class AnonymizerApp(tk.Tk):
         self.connection_tab = ttk.Frame(self.tabs_widget, padding=16)
         self.tables_tab = ttk.Frame(self.tabs_widget, padding=12)
         self.rules_tab = ttk.Frame(self.tabs_widget, padding=12)
+        self.lookup_tab = ttk.Frame(self.tabs_widget, padding=16)
         self.tabs_widget.add(self.connection_tab, text="Connections")
         self.tabs_widget.add(self.tables_tab, text="Tables")
         self.tabs_widget.add(self.rules_tab, text="Anonymization rules")
+        self.tabs_widget.add(self.lookup_tab, text="Lookup")
         self._build_connections()
         self._build_tables()
         self._build_rules()
+        self._build_lookup()
 
         footer = ttk.Frame(self, padding=(12, 4, 12, 12))
         footer.pack(fill="both")
@@ -158,6 +161,30 @@ class AnonymizerApp(tk.Tk):
         self.rules_editor = tk.Text(self.rules_tab, wrap="none", undo=True)
         self.rules_editor.pack(fill="both", expand=True)
         ttk.Label(self.rules_tab, text="Review generated rules carefully before copying. The editor accepts the same JSON format as rules.json.").pack(anchor="w", pady=(8, 0))
+
+    def _build_lookup(self) -> None:
+        self.lookup_table = tk.StringVar()
+        self.lookup_column = tk.StringVar()
+        self.lookup_value = tk.StringVar()
+        self.lookup_direction = tk.StringVar(value="original-to-anonymized")
+        form = ttk.Frame(self.lookup_tab)
+        form.pack(anchor="nw", fill="x")
+        fields = (("Table", self.lookup_table), ("Column", self.lookup_column), ("Exact value", self.lookup_value))
+        for row, (label, variable) in enumerate(fields):
+            ttk.Label(form, text=label, width=18).grid(row=row, column=0, sticky="w", pady=6)
+            ttk.Entry(form, textvariable=variable, width=60).grid(row=row, column=1, sticky="ew", pady=6)
+        ttk.Label(form, text="Direction", width=18).grid(row=3, column=0, sticky="nw", pady=6)
+        directions = ttk.Frame(form)
+        directions.grid(row=3, column=1, sticky="w", pady=6)
+        ttk.Radiobutton(directions, text="Original → anonymized", value="original-to-anonymized",
+                        variable=self.lookup_direction).pack(anchor="w")
+        ttk.Radiobutton(directions, text="Anonymized → original", value="anonymized-to-original",
+                        variable=self.lookup_direction).pack(anchor="w")
+        form.columnconfigure(1, weight=1)
+        ttk.Button(form, text="Find mapping", command=self._lookup).grid(row=4, column=1, sticky="w", pady=(10, 0))
+        ttk.Label(self.lookup_tab,
+                  text="Uses the SQLite mapping store selected above. Search is exact and may return multiple values.",
+                  wraplength=760).pack(anchor="w", pady=(16, 0))
 
     def _choose_config(self) -> None:
         path = filedialog.askopenfilename(title="Open config", filetypes=(("JSON files", "*.json"), ("All files", "*")))
@@ -313,6 +340,24 @@ class AnonymizerApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Could not start copy", str(exc))
 
+    def _lookup(self) -> None:
+        path = self.mapping_path.get().strip()
+        table = self.lookup_table.get().strip()
+        column = self.lookup_column.get().strip()
+        value = self.lookup_value.get()
+        if not path:
+            messagebox.showinfo("Select mapping store", "Choose the SQLite mapping store in the field above.")
+            return
+        if not table or not column:
+            messagebox.showinfo("Complete lookup fields", "Enter a table and column to search.")
+            return
+        self._run_async("Searching mapping store…", self._lookup_worker, path, table, column,
+                        value, self.lookup_direction.get())
+
+    def _lookup_worker(self, path: str, table: str, column: str, value: str, direction: str) -> None:
+        results = lookup_mapping(path, table, column, value, direction)
+        self.messages.put(("lookup_results", (direction, table, column, value, results)))
+
     def _copy_worker(self, config: dict[str, Any], rules: dict[str, Any], selected: list[str],
                      mapping_path: str | None, rules_path: str, allow_locks: bool,
                      include_dependencies: bool) -> None:
@@ -385,6 +430,14 @@ class AnonymizerApp(tk.Tk):
             elif kind == "connection_report":
                 self._log(value)
                 messagebox.showinfo("Connection test", value)
+            elif kind == "lookup_results":
+                direction, table, column, value, results = value
+                if results:
+                    report = [f"Lookup results ({direction}) for {table}.{column} = {value!r}:"]
+                    report.extend(f"  {result}" for result in results)
+                else:
+                    report = [f"No matching value found for {table}.{column} = {value!r}."]
+                self._log("\n".join(report))
             elif kind == "error":
                 self.status.set("Operation failed.")
                 self._log("Error: " + value)
