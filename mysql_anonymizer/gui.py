@@ -81,14 +81,17 @@ class AnonymizerApp(tk.Tk):
         self.tables_tab = ttk.Frame(self.tabs_widget, padding=12)
         self.rules_tab = ttk.Frame(self.tabs_widget, padding=12)
         self.lookup_tab = ttk.Frame(self.tabs_widget, padding=16)
+        self.browse_tab = ttk.Frame(self.tabs_widget, padding=12)
         self.tabs_widget.add(self.connection_tab, text="Connections")
         self.tabs_widget.add(self.tables_tab, text="Tables")
         self.tabs_widget.add(self.rules_tab, text="Anonymization rules")
         self.tabs_widget.add(self.lookup_tab, text="Lookup")
+        self.tabs_widget.add(self.browse_tab, text="Browse data")
         self._build_connections()
         self._build_tables()
         self._build_rules()
         self._build_lookup()
+        self._build_browse()
 
         footer = ttk.Frame(self, padding=(12, 4, 12, 12))
         footer.pack(fill="both")
@@ -188,6 +191,129 @@ class AnonymizerApp(tk.Tk):
                   text="Uses the SQLite mapping store selected above. Search is exact and may return multiple values.",
                   wraplength=760).pack(anchor="w", pady=(16, 0))
 
+    def _build_browse(self) -> None:
+        self.browse_role = tk.StringVar(value="source")
+        self.browse_table = tk.StringVar()
+        self.browse_search = tk.StringVar()
+        self.browse_column = tk.StringVar()
+        self.browse_column_value = tk.StringVar()
+        self.browse_tables_by_role: dict[str, list[dict[str, Any]]] = {}
+        controls = ttk.Frame(self.browse_tab)
+        controls.pack(fill="x", pady=(0, 8))
+        ttk.Label(controls, text="Database").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=3)
+        self.browse_role_box = ttk.Combobox(controls, textvariable=self.browse_role,
+                                            values=("source", "destination"), state="readonly", width=12)
+        self.browse_role_box.grid(row=0, column=1, sticky="w", pady=3)
+        self.browse_role_box.bind("<<ComboboxSelected>>", self._browse_role_selected)
+        self.browse_tables_button = ttk.Button(controls, text="Load tables", command=self._browse_load_tables)
+        self.browse_tables_button.grid(row=0, column=2, padx=8, pady=3)
+        ttk.Label(controls, text="Table").grid(row=0, column=3, sticky="w", padx=(8, 6), pady=3)
+        self.browse_table_box = ttk.Combobox(controls, textvariable=self.browse_table, state="readonly", width=28)
+        self.browse_table_box.grid(row=0, column=4, sticky="ew", pady=3)
+        self.browse_table_box.bind("<<ComboboxSelected>>", self._browse_table_selected)
+        ttk.Label(controls, text="Search all columns").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=3)
+        ttk.Entry(controls, textvariable=self.browse_search).grid(row=1, column=1, columnspan=4, sticky="ew", pady=3)
+        ttk.Label(controls, text="Column filter").grid(row=2, column=0, sticky="w", padx=(0, 6), pady=3)
+        self.browse_column_box = ttk.Combobox(controls, textvariable=self.browse_column, state="readonly", width=24)
+        self.browse_column_box.grid(row=2, column=1, sticky="ew", pady=3)
+        ttk.Entry(controls, textvariable=self.browse_column_value).grid(row=2, column=2, columnspan=2, sticky="ew", padx=(8, 0), pady=3)
+        self.browse_search_button = ttk.Button(controls, text="Search / refresh", command=self._browse_search)
+        self.browse_search_button.grid(row=2, column=4, sticky="e", padx=(8, 0), pady=3)
+        controls.columnconfigure(4, weight=1)
+
+        grid = ttk.Frame(self.browse_tab)
+        grid.pack(fill="both", expand=True)
+        self.browse_tree = ttk.Treeview(grid, show="headings")
+        yscroll = ttk.Scrollbar(grid, orient="vertical", command=self.browse_tree.yview)
+        xscroll = ttk.Scrollbar(grid, orient="horizontal", command=self.browse_tree.xview)
+        self.browse_tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.browse_tree.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        grid.rowconfigure(0, weight=1)
+        grid.columnconfigure(0, weight=1)
+        ttk.Label(self.browse_tab, text="Showing up to 200 matching rows. Search terms match anywhere within a value.").pack(anchor="w", pady=(6, 0))
+
+    def _browse_load_tables(self) -> None:
+        try:
+            config = self._config()
+            role = self.browse_role.get()
+            self._run_async(f"Loading {role} tables…", self._browse_tables_worker,
+                            role, config[role])
+        except Exception as exc:
+            messagebox.showerror("Invalid connection settings", str(exc))
+
+    def _browse_tables_worker(self, role: str, settings: dict[str, Any]) -> None:
+        conn = connect_with_guidance(role, settings)
+        try:
+            tables = inspect_schema(conn, settings["database"])
+            self.messages.put(("browse_tables", (role, tables)))
+        finally:
+            conn.close()
+
+    def _browse_role_selected(self, _event=None) -> None:
+        self.browse_table.set("")
+        self.browse_table_box.configure(values=())
+        self.browse_column.set("")
+        self.browse_column_box.configure(values=("",))
+
+    def _browse_table_selected(self, _event=None) -> None:
+        self._browse_update_columns()
+        self._browse_search()
+
+    def _browse_update_columns(self) -> None:
+        role = self.browse_role.get()
+        table_name = self.browse_table.get()
+        table = next((item for item in self.browse_tables_by_role.get(role, [])
+                      if item["name"] == table_name), None)
+        columns = [column["COLUMN_NAME"] for column in table["columns"]] if table else []
+        self.browse_column_box.configure(values=[""] + columns)
+        self.browse_column.set("")
+
+    def _browse_search(self) -> None:
+        table_name = self.browse_table.get()
+        role = self.browse_role.get()
+        table = next((item for item in self.browse_tables_by_role.get(role, [])
+                      if item["name"] == table_name), None)
+        if not table:
+            messagebox.showinfo("Select a table", "Load tables and choose a table first.")
+            return
+        column = self.browse_column.get().strip()
+        columns = [item["COLUMN_NAME"] for item in table["columns"]]
+        if column and column not in columns:
+            messagebox.showerror("Invalid column", "Choose a column from the selected table.")
+            return
+        try:
+            config = self._config()
+            self._run_async(f"Reading {role}.{table_name}…", self._browse_query_worker,
+                            role, config[role], table_name, columns, self.browse_search.get(),
+                            column, self.browse_column_value.get())
+        except Exception as exc:
+            messagebox.showerror("Invalid connection settings", str(exc))
+
+    def _browse_query_worker(self, role: str, settings: dict[str, Any], table: str,
+                             columns: list[str], search: str, filter_column: str,
+                             filter_value: str) -> None:
+        conn = connect_with_guidance(role, settings)
+        cur = conn.cursor()
+        try:
+            conditions, params = [], []
+            if search:
+                conditions.append("(" + " OR ".join(
+                    f"CAST(`{name.replace('`', '``')}` AS CHAR) LIKE %s" for name in columns
+                ) + ")")
+                params.extend([f"%{search}%"] * len(columns))
+            if filter_column and filter_value:
+                conditions.append(f"CAST(`{filter_column.replace('`', '``')}` AS CHAR) LIKE %s")
+                params.append(f"%{filter_value}%")
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+            cur.execute(f"SELECT * FROM `{table.replace('`', '``')}`{where} LIMIT 201", tuple(params))
+            rows = cur.fetchall()
+            self.messages.put(("browse_rows", (table, columns, rows[:200], len(rows) > 200)))
+        finally:
+            cur.close()
+            conn.close()
+
     def _choose_config(self) -> None:
         path = filedialog.askopenfilename(title="Open config", filetypes=(("JSON files", "*.json"), ("All files", "*")))
         if path:
@@ -201,7 +327,10 @@ class AnonymizerApp(tk.Tk):
             self._load_rules()
 
     def _choose_mapping(self) -> None:
-        path = filedialog.asksaveasfilename(title="Mapping store path", defaultextension=".sqlite3")
+        path = filedialog.askopenfilename(
+            title="Open mapping store",
+            filetypes=(("SQLite databases", "*.sqlite *.sqlite3 *.db"), ("All files", "*")),
+        )
         if path:
             self.mapping_path.set(path)
 
@@ -425,6 +554,22 @@ class AnonymizerApp(tk.Tk):
                 self._log(value)
             elif kind == "progress":
                 self._show_progress(value)
+            elif kind == "browse_tables":
+                role, tables = value
+                self.browse_tables_by_role[role] = tables
+                names = [table["name"] for table in tables]
+                self.browse_table_box.configure(values=names)
+                self.browse_table.set(names[0] if names else "")
+                self._log(f"Loaded {len(names)} {role} table(s) for browsing.")
+                if names:
+                    self._browse_update_columns()
+                else:
+                    self._clear_browse_rows()
+            elif kind == "browse_rows":
+                table, columns, rows, truncated = value
+                self._display_browse_rows(columns, rows)
+                suffix = "; showing the first 200 rows, refine the search" if truncated else ""
+                self.status.set(f"Showing {len(rows)} row(s) from {table}{suffix}.")
             elif kind == "connection_report":
                 self._log(value)
                 messagebox.showinfo("Connection test", value)
@@ -441,7 +586,8 @@ class AnonymizerApp(tk.Tk):
                 self._log("Error: " + value)
                 messagebox.showerror("Operation failed", value)
             elif kind == "done":
-                self.status.set("Ready.")
+                if not self.status.get().startswith("Showing "):
+                    self.status.set("Ready.")
                 self.progress.configure(value=self.progress.cget("maximum"))
             if kind in {"error", "done"}:
                 self.busy = False
@@ -450,8 +596,32 @@ class AnonymizerApp(tk.Tk):
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
-        for widget in (self.save_config_button, self.inspect_button, self.test_connections_button, self.copy_button):
+        for widget in (self.save_config_button, self.inspect_button, self.test_connections_button,
+                       self.copy_button, self.browse_tables_button, self.browse_search_button):
             widget.configure(state=state)
+
+    def _clear_browse_rows(self) -> None:
+        self.browse_tree.delete(*self.browse_tree.get_children())
+        self.browse_tree.configure(columns=())
+
+    def _display_browse_rows(self, columns: list[str], rows: list[tuple[Any, ...]]) -> None:
+        self.browse_tree.delete(*self.browse_tree.get_children())
+        identifiers = [f"column_{index}" for index in range(len(columns))]
+        self.browse_tree.configure(columns=identifiers)
+        for identifier, name in zip(identifiers, columns):
+            self.browse_tree.heading(identifier, text=name)
+            self.browse_tree.column(identifier, width=150, minwidth=80, stretch=True)
+        for row in rows:
+            values = []
+            for value in row:
+                if value is None:
+                    display = "NULL"
+                elif isinstance(value, bytes):
+                    display = "0x" + value[:100].hex() + ("…" if len(value) > 100 else "")
+                else:
+                    display = str(value)
+                values.append(display[:500] + ("…" if len(display) > 500 else ""))
+            self.browse_tree.insert("", "end", values=values)
 
     def _show_progress(self, progress: dict[str, Any]) -> None:
         event = progress["event"]
