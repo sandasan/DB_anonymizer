@@ -103,6 +103,8 @@ class AnonymizerApp(tk.Tk):
         self.copy_button = ttk.Button(buttons, text="Copy selected tables", command=self._copy)
         self.copy_button.pack(side="right")
         self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
+        self.progress = ttk.Progressbar(footer, mode="determinate", maximum=1, value=0)
+        self.progress.pack(fill="x", pady=(0, 4))
         ttk.Label(footer, textvariable=self.status).pack(anchor="w", pady=(0, 4))
         self.output = tk.Text(footer, height=8, wrap="word", state="disabled")
         self.output.pack(fill="both", expand=True)
@@ -370,17 +372,11 @@ class AnonymizerApp(tk.Tk):
                 save_json_atomic(rules_path, rules)
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
             destination = connect_with_guidance("destination", config["destination"])
-            cur = destination.cursor()
-            cur.execute("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s",
-                        (config["destination"]["database"],))
-            table_count = cur.fetchone()[0]
-            cur.close()
-            if table_count:
-                raise ValueError("Destination schema must be empty; nothing was changed")
             counts = copy_database(
                 source, destination, config["source"]["database"], rules,
                 config.get("batch_size", 500), allow_locks,
                 mapping_path, selected, include_dependencies,
+                lambda progress: self.messages.put(("progress", progress)),
             )
             copied = set(counts)
             not_copied = [table["name"] for table in tables if table["name"] not in copied]
@@ -427,6 +423,8 @@ class AnonymizerApp(tk.Tk):
                 self._log(f"Found {len(self.tables)} source tables.")
             elif kind == "log":
                 self._log(value)
+            elif kind == "progress":
+                self._show_progress(value)
             elif kind == "connection_report":
                 self._log(value)
                 messagebox.showinfo("Connection test", value)
@@ -444,6 +442,7 @@ class AnonymizerApp(tk.Tk):
                 messagebox.showerror("Operation failed", value)
             elif kind == "done":
                 self.status.set("Ready.")
+                self.progress.configure(value=self.progress.cget("maximum"))
             if kind in {"error", "done"}:
                 self.busy = False
                 self._set_busy(False)
@@ -453,6 +452,28 @@ class AnonymizerApp(tk.Tk):
         state = "disabled" if busy else "normal"
         for widget in (self.save_config_button, self.inspect_button, self.test_connections_button, self.copy_button):
             widget.configure(state=state)
+
+    def _show_progress(self, progress: dict[str, Any]) -> None:
+        event = progress["event"]
+        total_rows = progress.get("total_rows", 0)
+        total_tables = progress.get("total_tables", 0)
+        if event == "start":
+            maximum = total_rows if total_rows else max(total_tables, 1)
+            self.progress.configure(maximum=maximum, value=0)
+            self.status.set(f"Copying {total_tables} table(s), {total_rows} row(s)…")
+            return
+        table = progress.get("table", "")
+        table_index = progress.get("table_index", 0)
+        table_rows = progress.get("table_rows", 0)
+        copied_rows = progress.get("copied_rows", 0)
+        if total_rows:
+            self.progress.configure(value=progress.get("completed_rows", 0))
+        elif event == "table_done":
+            self.progress.configure(value=progress.get("completed_tables", 0))
+        self.status.set(
+            f"Copying table {table_index}/{total_tables}: {table} "
+            f"({copied_rows}/{table_rows} rows; {progress.get('completed_rows', 0)}/{total_rows} total)"
+        )
 
     def _select_all(self) -> None:
         self.table_list.select_set(0, "end")

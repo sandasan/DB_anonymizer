@@ -76,11 +76,6 @@ def main() -> None:
                     print("WARNING: allow_source_table_locks is enabled; if non-InnoDB tables exist, the copy will block writes to every source table until it finishes.", file=sys.stderr)
                 destination = connect(config["destination"])
                 try:
-                    cur = destination.cursor()
-                    cur.execute("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s", (config["destination"]["database"],))
-                    if cur.fetchone()[0] != 0:
-                        raise ValueError("Destination schema must be empty; nothing was changed")
-                    cur.close()
                     counts = copy_database(source, destination, config["source"]["database"], rules,
                                            config.get("batch_size", 500), config.get("allow_source_table_locks", False),
                                            args.mapping_store, args.selected_tables, args.include_dependencies)

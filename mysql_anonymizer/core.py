@@ -7,7 +7,7 @@ import re
 import sqlite3
 import tempfile
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 import mysql.connector
 
@@ -98,7 +98,8 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
 
 
 def resolve_table_selection(tables: list[dict[str, Any]], selected_tables: list[str] | None,
-                            include_dependencies: bool = False) -> list[str]:
+                            include_dependencies: bool = False,
+                            existing_destination_tables: set[str] | None = None) -> list[str]:
     available = {table["name"] for table in tables}
     if selected_tables is None:
         return [table["name"] for table in tables]
@@ -108,6 +109,7 @@ def resolve_table_selection(tables: list[dict[str, Any]], selected_tables: list[
     if unknown:
         raise ValueError("Unknown source table(s): " + ", ".join(unknown))
 
+    existing_destination_tables = existing_destination_tables or set()
     selected = set(selected_tables)
     if include_dependencies:
         by_name = {table["name"]: table for table in tables}
@@ -115,12 +117,13 @@ def resolve_table_selection(tables: list[dict[str, Any]], selected_tables: list[
         while pending:
             current = pending.pop()
             for dependency in by_name[current].get("references", []):
-                if dependency not in selected:
+                if dependency not in selected and dependency not in existing_destination_tables:
                     selected.add(dependency)
                     pending.append(dependency)
     else:
         missing = sorted({ref for table in tables if table["name"] in selected
-                          for ref in table.get("references", []) if ref not in selected})
+                          for ref in table.get("references", [])
+                          if ref not in selected and ref not in existing_destination_tables})
         if missing:
             raise ValueError("Selected tables reference tables that are not selected: "
                              + ", ".join(missing) + ". Include these dependencies with --table or use --include-dependencies")
@@ -279,10 +282,20 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
 def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
                   allow_source_table_locks: bool = False, mapping_store: str | None = None,
                   selected_tables: list[str] | None = None,
-                  include_dependencies: bool = False) -> dict[str, int]:
+                  include_dependencies: bool = False,
+                  progress_callback: Callable[[dict[str, Any]], None] | None = None) -> dict[str, int]:
     all_tables = inspect_schema(source, schema)
-    selected_names = set(resolve_table_selection(all_tables, selected_tables, include_dependencies))
+    dst_check = destination.cursor()
+    dst_check.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()")
+    existing_destination_tables = {row[0] for row in dst_check.fetchall()}
+    dst_check.close()
+    selected_names = set(resolve_table_selection(
+        all_tables, selected_tables, include_dependencies, existing_destination_tables))
     tables = [table for table in all_tables if table["name"] in selected_names]
+    collisions = sorted(selected_names & existing_destination_tables)
+    if collisions:
+        raise ValueError("Destination already contains selected table(s): " + ", ".join(collisions)
+                         + ". Remove or rename them before copying")
     non_transactional = [t["name"] for t in tables if t["engine"] != "InnoDB"]
     if non_transactional and not allow_source_table_locks:
         names = ", ".join(non_transactional)
@@ -293,8 +306,6 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     mapping_db = open_mapping_store(mapping_store) if mapping_store else None
     source_locked = False
     try:
-        if mapping_db is not None:
-            mapping_db.execute("DELETE FROM mappings")
         if non_transactional:
             # MySQL releases table locks on START TRANSACTION. Disable autocommit first,
             # then hold explicit READ locks across DDL inspection and all row reads.
@@ -305,9 +316,21 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 source_locked = True
         else:
             source.start_transaction(isolation_level="REPEATABLE READ", consistent_snapshot=True, readonly=True)
+        row_totals: dict[str, int] = {}
+        for table in tables:
+            src.execute(f"SELECT COUNT(*) FROM {qname(schema, table['name'])}")
+            row_totals[table["name"]] = src.fetchone()[0]
+        total_rows = sum(row_totals.values())
+        if progress_callback:
+            progress_callback({"event": "start", "total_tables": len(tables), "total_rows": total_rows})
         dst.execute("SET FOREIGN_KEY_CHECKS=0")
         for t in tables:
             name = t["name"]
+            if progress_callback:
+                progress_callback({"event": "table", "table": name,
+                                   "table_index": len(counts) + 1, "total_tables": len(tables),
+                                   "table_rows": row_totals[name], "copied_rows": 0,
+                                   "total_rows": total_rows, "completed_rows": sum(counts.values())})
             src.execute(f"SHOW CREATE TABLE {qname(schema, name)}")
             ddl = src.fetchone()[1]
             quoted = name.replace("`", "``")
@@ -381,7 +404,20 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                         f"{pinpointed}: {exc}"
                     ) from exc
                 count += len(output)
+                if progress_callback:
+                    progress_callback({"event": "batch", "table": name,
+                                       "table_index": len(counts) + 1, "total_tables": len(tables),
+                                       "table_rows": row_totals[name], "copied_rows": count,
+                                       "total_rows": total_rows,
+                                       "completed_rows": sum(counts.values()) + count})
             counts[name] = count
+            if progress_callback:
+                progress_callback({"event": "table_done", "table": name,
+                                   "table_index": len(counts), "total_tables": len(tables),
+                                   "table_rows": row_totals[name], "copied_rows": count,
+                                   "total_rows": total_rows,
+                                   "completed_rows": sum(counts.values()),
+                                   "completed_tables": len(counts)})
         destination.commit()
         if mapping_db is not None:
             mapping_db.commit()

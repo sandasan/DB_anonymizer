@@ -1,10 +1,10 @@
 # MySQL Anonymized Copy
 
-A local CLI to copy MySQL table definitions and data into a separate, empty schema while anonymizing explicitly configured columns. Primary and foreign keys are retained. Authentication fields are preserved so copied accounts retain their existing passwords.
+A local CLI to copy MySQL table definitions and data into a separate schema while anonymizing explicitly configured columns. You can copy selected tables in multiple runs; tables with the same names already in the destination are rejected. Primary and foreign keys are retained. Authentication fields are preserved so copied accounts retain their existing passwords.
 
 ## Setup and quick start
 
-Requirements: Python 3.11+, MySQL access, and an empty destination schema. Use a read-only account for the source and a destination user limited to the destination schema.
+Requirements: Python 3.11+ and MySQL access. Use a read-only account for the source and a destination user limited to the destination schema.
 
 ### Create a read-only source user
 
@@ -121,7 +121,7 @@ If you have not installed the project in that environment yet, run `python -m pi
 
 On Linux, you can also double-click `mysql-anonymizer.desktop` in the project folder. If the desktop asks, choose **Allow Launching** or **Trust and Launch**. This launcher expects the project at `/home/alexander/projects/DB_anonymizer`; if you move the folder, update the `Exec` and `Path` entries in the `.desktop` file. The `launch-gui.sh` script can also be run directly from the file manager after marking it as executable.
 
-The window lets you load connection settings and rules, inspect the source, select tables, include foreign-key dependencies, edit or generate anonymization rules, start the copy, and search mapping values in either direction. Use **Test connections** to check both database accounts before copying. If MySQL rejects authentication, the GUI identifies the source or destination account and suggests checking its username, host, password, and grants. MySQL error 1045 cannot distinguish a missing account from a wrong password or a host mismatch. Passwords entered in the window are used for that session and are not written to the config file. You can also leave password fields blank and use the configured `password_env` variables. The destination must still be an empty schema, and the same credential confirmation in `rules.json` is required.
+The window lets you load connection settings and rules, inspect the source, select tables, include foreign-key dependencies, edit or generate anonymization rules, start the copy, and search mapping values in either direction. Use **Test connections** to check both database accounts before copying. If MySQL rejects authentication, the GUI identifies the source or destination account and suggests checking its username, host, password, and grants. MySQL error 1045 cannot distinguish a missing account from a wrong password or a host mismatch. Passwords entered in the window are used for that session and are not written to the config file. You can also leave password fields blank and use the configured `password_env` variables. Existing destination tables are allowed as long as their names do not collide with the tables being copied; referenced tables may already exist in the destination.
 
 For GUI lookups, first choose a mapping store at the top of the window and copy data with that path selected. Open the **Lookup** tab, enter the table, column, and exact value, then choose original-to-anonymized or anonymized-to-original. The search uses the mapping store and may return multiple matches.
 
@@ -172,7 +172,7 @@ mysql-anonymizer init-config --config config.json --output rules.json
 Review `rules.json` carefully. List sensitive data columns for anonymization and preserve primary/foreign keys, login names, email addresses used for login, password hashes, and other authentication fields. The starter rules use column-name guesses and cannot identify every sensitive field. When `copy` finds a primary key, `id`, or `*_id` column under `anonymize`, it automatically moves that column to `preserve` and saves the repaired rules file before copying. MySQL `SET` values are converted from the connector's Python set representation to MySQL's comma-separated form when inserted. For unique text fields such as `accommtype.name`, the generated `name` transformation is supported and collision handling keeps transformed values distinct. You can also set `{"type": "unique"}` to create opaque pseudonyms. Composite unique indexes need application-specific review. When satisfied that the copied password hashes should remain usable, set `"confirm_copy_password_hashes": true` in `rules.json`, then run:
 
 ```bash
-# Copy into the separate, empty destination schema
+# Copy into the separate destination schema
 mysql-anonymizer copy --config config.json --rules rules.json
 ```
 
@@ -209,7 +209,7 @@ The source should be accessed through a read-only account; the destination user 
 
 ### Recover after a failed copy
 
-A failed copy may leave some or all tables in the destination. MySQL commits table creation separately, so rolling back inserted rows does not necessarily remove the created tables. The next run requires an empty destination and will stop if those tables remain.
+A failed copy may leave some or all tables in the destination. MySQL commits table creation separately, so rolling back inserted rows does not necessarily remove the created tables. A later run can copy other tables, but will stop if a requested table name already exists in the destination.
 
 The safest recovery is to create a new, empty destination schema and change `destination.database` in `config.json` to that schema. Grant the destination user access to the new schema as described above.
 
