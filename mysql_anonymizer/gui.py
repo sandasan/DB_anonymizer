@@ -18,6 +18,7 @@ from .core import (
     list_mapping_fields,
     lookup_mapping,
     migrate_identifier_rules,
+    prune_rules_to_schema,
     save_json_atomic,
 )
 
@@ -72,7 +73,7 @@ class AnonymizerApp(tk.Tk):
     def _build_ui(self) -> None:
         paths = ttk.Frame(self, padding=(12, 12, 12, 4))
         paths.pack(fill="x")
-        self._path_row(paths, 0, "Config", self.config_path, self._choose_config)
+        self._config_path_row(paths, 0)
         self._path_row(paths, 1, "Rules", self.rules_path, self._choose_rules)
         self._path_row(paths, 2, "Mapping store (optional)", self.mapping_path, self._choose_mapping)
 
@@ -112,6 +113,13 @@ class AnonymizerApp(tk.Tk):
         ttk.Label(footer, textvariable=self.status).pack(anchor="w", pady=(0, 4))
         self.output = tk.Text(footer, height=8, wrap="word", state="disabled")
         self.output.pack(fill="both", expand=True)
+
+    def _config_path_row(self, parent: ttk.Frame, row: int) -> None:
+        ttk.Label(parent, text="Config", width=22).grid(row=row, column=0, sticky="w", pady=2)
+        ttk.Entry(parent, textvariable=self.config_path).grid(row=row, column=1, sticky="ew", padx=8, pady=2)
+        ttk.Button(parent, text="Load config…", command=self._choose_config).grid(row=row, column=2, padx=(0, 4), pady=2)
+        ttk.Button(parent, text="Save config as…", command=self._save_config_as).grid(row=row, column=3, pady=2)
+        parent.columnconfigure(1, weight=1)
 
     def _path_row(self, parent: ttk.Frame, row: int, label: str, var: tk.StringVar, browse) -> None:
         ttk.Label(parent, text=label, width=22).grid(row=row, column=0, sticky="w", pady=2)
@@ -331,6 +339,16 @@ class AnonymizerApp(tk.Tk):
             self.config_path.set(path)
             self._load_config()
 
+    def _save_config_as(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save config as",
+            defaultextension=".json",
+            filetypes=(("JSON files", "*.json"), ("All files", "*")),
+        )
+        if path:
+            self.config_path.set(path)
+            self._save_config()
+
     def _choose_rules(self) -> None:
         path = filedialog.askopenfilename(title="Open rules", filetypes=(("JSON files", "*.json"), ("All files", "*")))
         if path:
@@ -489,8 +507,30 @@ class AnonymizerApp(tk.Tk):
                 messagebox.showinfo("Select tables", "Select at least one table to copy.")
                 return
             config = self._config()
+            relevant_tables = set(selected)
+            if self.include_dependencies.get():
+                by_name = {table["name"]: table for table in self.tables}
+                pending = list(relevant_tables)
+                while pending:
+                    current = pending.pop()
+                    for dependency in by_name[current].get("references", []):
+                        if dependency not in relevant_tables:
+                            relevant_tables.add(dependency)
+                            pending.append(dependency)
+            rules, stale_rules = prune_rules_to_schema(rules, self.tables, relevant_tables)
+            if stale_rules:
+                shown = stale_rules[:20]
+                details = "\n".join(f"  {item}" for item in shown)
+                if len(stale_rules) > len(shown):
+                    details += f"\n  … and {len(stale_rules) - len(shown)} more"
+                if not messagebox.askyesno(
+                    "Rules don’t match this source",
+                    "These rules refer to columns missing from the selected source and will be ignored for this copy:\n\n"
+                    f"{details}\n\nColumns without an applicable rule are copied unchanged. Continue?",
+                ):
+                    return
             mapping_path = self.mapping_path.get().strip() or None
-            rules_path = self.rules_path.get()
+            rules_path = None if stale_rules else self.rules_path.get()
             allow_locks = self.allow_locks.get()
             include_dependencies = self.include_dependencies.get()
             self._run_async("Copying selected tables…", self._copy_worker, config, rules, selected,
@@ -517,15 +557,16 @@ class AnonymizerApp(tk.Tk):
         self.messages.put(("lookup_results", (direction, table, column, value, results)))
 
     def _copy_worker(self, config: dict[str, Any], rules: dict[str, Any], selected: list[str],
-                     mapping_path: str | None, rules_path: str, allow_locks: bool,
+                     mapping_path: str | None, rules_path: str | None, allow_locks: bool,
                      include_dependencies: bool) -> None:
         source = connect_with_guidance("source", config["source"])
         destination = None
         try:
             tables = inspect_schema(source, config["source"]["database"])
             moved = migrate_identifier_rules(rules, tables)
-            if moved:
+            if moved and rules_path:
                 save_json_atomic(rules_path, rules)
+            if moved:
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
             destination = connect_with_guidance("destination", config["destination"])
             counts = copy_database(

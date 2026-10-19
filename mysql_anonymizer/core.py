@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import tempfile
+from copy import deepcopy
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
@@ -155,6 +156,37 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
     return rules
 
 
+def prune_rules_to_schema(rules: dict[str, Any], tables: list[dict[str, Any]],
+                          target_tables: set[str]) -> tuple[dict[str, Any], list[str]]:
+    """Copy rules while dropping stale column references for tables being copied."""
+    compatible = deepcopy(rules)
+    source_columns = {
+        table["name"]: {column["COLUMN_NAME"] for column in table["columns"]}
+        for table in tables if table["name"] in target_tables
+    }
+    removed: list[str] = []
+    table_rules = compatible.get("tables", {})
+    if not isinstance(table_rules, dict):
+        return compatible, removed
+    for table_name, available_columns in source_columns.items():
+        config = table_rules.get(table_name)
+        if not isinstance(config, dict):
+            continue
+        preserve = config.get("preserve", [])
+        if isinstance(preserve, list):
+            for column in preserve[:]:
+                if column not in available_columns:
+                    preserve.remove(column)
+                    removed.append(f"{table_name}.{column}")
+        anonymize = config.get("anonymize", {})
+        if isinstance(anonymize, dict):
+            for column in list(anonymize):
+                if column not in available_columns:
+                    del anonymize[column]
+                    removed.append(f"{table_name}.{column}")
+    return compatible, sorted(set(removed))
+
+
 def stable_number(table: str, column: str, value: Any, modulus: int) -> int:
     digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).digest()
     return int.from_bytes(digest[:8], "big") % modulus
@@ -260,7 +292,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
     existing = {t["name"]: t for t in tables}
     for tn, config in rules.get("tables", {}).items():
         if tn not in existing:
-            raise ValueError(f"Rules reference missing table {tn!r}")
+            continue
         cols = {c["COLUMN_NAME"]: c for c in existing[tn]["columns"]}
         preserved = config.get("preserve", [])
         for col in preserved:
@@ -311,7 +343,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     if non_transactional and not allow_source_table_locks:
         names = ", ".join(non_transactional)
         raise ValueError(f"Non-InnoDB source tables found ({names}). Set allow_source_table_locks=true only if it is acceptable to block writes to all source tables during the copy")
-    validate_rules(all_tables, rules)
+    validate_rules(tables, rules)
     dst, src = destination.cursor(), source.cursor()
     counts: dict[str, int] = {}
     mapping_db = open_mapping_store(mapping_store) if mapping_store else None
