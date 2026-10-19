@@ -159,6 +159,21 @@ Review `rules.json` carefully. List sensitive data columns for anonymization and
 mysql-anonymizer copy --config config.json --rules rules.json
 ```
 
+To enable exact lookups between original and anonymized values, pass a local SQLite mapping store during the copy. The file contains original sensitive values, so keep it private and include it only in a suitably protected backup:
+
+```bash
+mysql-anonymizer copy --config config.json --rules rules.json --mapping-store private-mappings.sqlite3
+```
+
+Search in either direction by table and column:
+
+```bash
+mysql-anonymizer lookup --mapping-store private-mappings.sqlite3 --table customers --column phone --value '+1 555 0100' --direction original-to-anonymized
+mysql-anonymizer lookup --mapping-store private-mappings.sqlite3 --table customers --column phone --value '+15551234567' --direction anonymized-to-original
+```
+
+The lookup is exact and returns every matching value (an anonymized value can correspond to more than one original value for non-unique transformations). It indexes only configured anonymized columns; preserved columns are not recorded.
+
 The source should be accessed through a read-only account; the destination user should only have access to the destination schema. Destination must be empty. The tool never drops or truncates objects. It currently copies base tables and rows, not views, triggers, procedures, events, or grants. Review app-specific columns, free text, and JSON manually. Protect the resulting database like production credentials.
 
 ### Recover after a failed copy

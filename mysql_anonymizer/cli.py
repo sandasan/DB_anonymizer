@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from .core import connect, copy_database, init_rules, inspect_schema, load_json, migrate_identifier_rules, save_json_atomic
+from .core import connect, copy_database, init_rules, inspect_schema, load_json, lookup_mapping, migrate_identifier_rules, save_json_atomic
 
 
 def check_config(config: dict) -> None:
@@ -19,15 +19,32 @@ def check_config(config: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(prog="mysql-anonymizer")
     sub = parser.add_subparsers(dest="command", required=True)
-    for command in ("inspect", "init-config", "copy"):
+    for command in ("inspect", "init-config", "copy", "lookup"):
         p = sub.add_parser(command)
-        p.add_argument("--config", required=True)
+        if command != "lookup":
+            p.add_argument("--config", required=True)
         if command == "init-config":
             p.add_argument("--output", required=True)
         if command == "copy":
             p.add_argument("--rules", required=True)
+            p.add_argument("--mapping-store", help="SQLite file for bidirectional value lookups")
+        if command == "lookup":
+            p.add_argument("--mapping-store", required=True)
+            p.add_argument("--table", required=True)
+            p.add_argument("--column", required=True)
+            p.add_argument("--value", required=True)
+            p.add_argument("--direction", choices=("original-to-anonymized", "anonymized-to-original"), required=True)
     args = parser.parse_args()
     try:
+        if args.command == "lookup":
+            results = lookup_mapping(args.mapping_store, args.table, args.column, args.value, args.direction)
+            if results:
+                for result in results:
+                    print(result)
+            else:
+                print("No matching mapping found", file=sys.stderr)
+                raise SystemExit(2)
+            return
         config = load_json(args.config)
         check_config(config)
         source = connect(config["source"])
@@ -61,7 +78,8 @@ def main() -> None:
                         raise ValueError("Destination schema must be empty; nothing was changed")
                     cur.close()
                     counts = copy_database(source, destination, config["source"]["database"], rules,
-                                           config.get("batch_size", 500), config.get("allow_source_table_locks", False))
+                                           config.get("batch_size", 500), config.get("allow_source_table_locks", False),
+                                           args.mapping_store)
                     print("Copy complete:")
                     for table, count in counts.items():
                         print(f"  {table}: {count} rows")

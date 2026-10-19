@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import tempfile
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -173,6 +174,36 @@ def text_column_length(column_type: str) -> int:
     return 255
 
 
+def open_mapping_store(path: str) -> sqlite3.Connection:
+    """Open a private SQLite index of reversible anonymization mappings."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    if not os.path.exists(path):
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+    os.chmod(path, 0o600)
+    db = sqlite3.connect(path)
+    db.execute("PRAGMA journal_mode=WAL")
+    db.execute("""CREATE TABLE IF NOT EXISTS mappings (
+        table_name TEXT NOT NULL, column_name TEXT NOT NULL,
+        original_value TEXT NOT NULL, anonymized_value TEXT NOT NULL,
+        PRIMARY KEY (table_name, column_name, original_value)
+    )""")
+    db.execute("CREATE INDEX IF NOT EXISTS mappings_reverse ON mappings(table_name, column_name, anonymized_value)")
+    return db
+
+
+def lookup_mapping(path: str, table: str, column: str, value: str,
+                   direction: str = "original-to-anonymized") -> list[str]:
+    if direction == "original-to-anonymized":
+        sql, params = "SELECT DISTINCT anonymized_value FROM mappings WHERE table_name=? AND column_name=? AND original_value=? ORDER BY anonymized_value", (table, column, value)
+    elif direction == "anonymized-to-original":
+        sql, params = "SELECT DISTINCT original_value FROM mappings WHERE table_name=? AND column_name=? AND anonymized_value=? ORDER BY original_value", (table, column, value)
+    else:
+        raise ValueError(f"Unsupported lookup direction {direction!r}")
+    with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        return [row[0] for row in db.execute(sql, params)]
+
+
 def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
     existing = {t["name"]: t for t in tables}
     for tn, config in rules.get("tables", {}).items():
@@ -208,7 +239,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
 
 
 def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
-                  allow_source_table_locks: bool = False) -> dict[str, int]:
+                  allow_source_table_locks: bool = False, mapping_store: str | None = None) -> dict[str, int]:
     tables = inspect_schema(source, schema)
     non_transactional = [t["name"] for t in tables if t["engine"] != "InnoDB"]
     if non_transactional and not allow_source_table_locks:
@@ -217,8 +248,11 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     validate_rules(tables, rules)
     dst, src = destination.cursor(), source.cursor()
     counts: dict[str, int] = {}
+    mapping_db = open_mapping_store(mapping_store) if mapping_store else None
     source_locked = False
     try:
+        if mapping_db is not None:
+            mapping_db.execute("DELETE FROM mappings")
         if non_transactional:
             # MySQL releases table locks on START TRANSACTION. Disable autocommit first,
             # then hold explicit READ locks across DDL inspection and all row reads.
@@ -262,13 +296,19 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                             # while INSERT parameters require MySQL's comma-separated form.
                             values[i] = ",".join(sorted(values[i]))
                         if col in transforms:
-                            new_value = transform(values[i], transforms[col], name, col)
+                            original_value = values[i]
+                            new_value = transform(original_value, transforms[col], name, col)
                             if col in unique_state and new_value is not None:
                                 mapping, used = unique_state[col]
                                 new_value = unique_text(values[i], new_value, name, col,
                                                         text_column_length(column_info[col]["COLUMN_TYPE"]),
                                                         mapping, used)
                             values[i] = new_value
+                            if mapping_db is not None and original_value is not None and new_value is not None:
+                                mapping_db.execute(
+                                    "INSERT OR REPLACE INTO mappings VALUES (?, ?, ?, ?)",
+                                    (name, col, str(original_value), str(new_value)),
+                                )
                     output.append(tuple(values))
                 try:
                     dst.executemany(insert, output)
@@ -301,8 +341,12 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 count += len(output)
             counts[name] = count
         destination.commit()
+        if mapping_db is not None:
+            mapping_db.commit()
     except Exception:
         destination.rollback()
+        if mapping_db is not None:
+            mapping_db.rollback()
         raise
     finally:
         try:
@@ -320,6 +364,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 pass
         src.close()
         dst.close()
+        if mapping_db is not None:
+            mapping_db.close()
         if not source_locked:
             source.rollback()
     return counts
