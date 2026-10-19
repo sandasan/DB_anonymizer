@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=MySQL Anonymized Copy
+Comment=Launch the MySQL anonymization GUI
+Exec=/home/alexander/projects/DB_anonymizer/launch-gui.sh
+Path=/home/alexander/projects/DB_anonymizer
+Terminal=false
+Categories=Utility;Database;
+StartupNotify=true

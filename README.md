@@ -119,6 +119,8 @@ mysql-anonymizer-gui
 
 If you have not installed the project in that environment yet, run `python -m pip install -e .` first. You can also start the window directly with `python -m mysql_anonymizer.gui`.
 
+On Linux, you can also double-click `mysql-anonymizer.desktop` in the project folder. If the desktop asks, choose **Allow Launching** or **Trust and Launch**. This launcher expects the project at `/home/alexander/projects/DB_anonymizer`; if you move the folder, update the `Exec` and `Path` entries in the `.desktop` file. The `launch-gui.sh` script can also be run directly from the file manager after marking it as executable.
+
 The window lets you load connection settings and rules, inspect the source, select tables, include foreign-key dependencies, edit or generate anonymization rules, and start the copy. Passwords entered in the window are used for that session and are not written to the config file. You can also leave password fields blank and use the configured `password_env` variables. The destination must still be an empty schema, and the same credential confirmation in `rules.json` is required.
 
 Run these commands from the project directory:
