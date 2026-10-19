@@ -108,6 +108,19 @@ mysql-anonymizer inspect --config config.json
 
 If inspection fails because of connector incompatibility, installing MariaDB Connector/Python alone will not switch this application to that driver; the app currently imports MySQL Connector/Python and would need a connector adapter change.
 
+### Graphical interface
+
+From the project directory, activate the virtual environment and launch the desktop interface:
+
+```bash
+source .venv/bin/activate
+mysql-anonymizer-gui
+```
+
+If you have not installed the project in that environment yet, run `python -m pip install -e .` first. You can also start the window directly with `python -m mysql_anonymizer.gui`.
+
+The window lets you load connection settings and rules, inspect the source, select tables, include foreign-key dependencies, edit or generate anonymization rules, and start the copy. Passwords entered in the window are used for that session and are not written to the config file. You can also leave password fields blank and use the configured `password_env` variables. The destination must still be an empty schema, and the same credential confirmation in `rules.json` is required.
+
 Run these commands from the project directory:
 
 ```bash
