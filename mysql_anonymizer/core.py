@@ -369,11 +369,6 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         dst.execute("SET FOREIGN_KEY_CHECKS=0")
         for t in tables:
             name = t["name"]
-            if progress_callback:
-                progress_callback({"event": "table", "table": name,
-                                   "table_index": len(counts) + 1, "total_tables": len(tables),
-                                   "table_rows": row_totals[name], "copied_rows": 0,
-                                   "total_rows": total_rows, "completed_rows": sum(counts.values())})
             src.execute(f"SHOW CREATE TABLE {qname(schema, name)}")
             ddl = src.fetchone()[1]
             quoted = name.replace("`", "``")
@@ -381,6 +376,11 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             dst.execute(ddl)
         for t in tables:
             name = t["name"]
+            if progress_callback:
+                progress_callback({"event": "table", "table": name,
+                                   "table_index": len(counts) + 1, "total_tables": len(tables),
+                                   "table_rows": row_totals[name], "copied_rows": 0,
+                                   "total_rows": total_rows, "completed_rows": sum(counts.values())})
             cols = [c for c in t["columns"] if "GENERATED" not in c["EXTRA"].upper()]
             names = [c["COLUMN_NAME"] for c in cols]
             qcols = ",".join(f"`{c.replace('`', '``')}`" for c in names)

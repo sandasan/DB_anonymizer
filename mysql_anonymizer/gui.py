@@ -5,6 +5,7 @@ import os
 import queue
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -63,6 +64,7 @@ class AnonymizerApp(tk.Tk):
         self.source_inspected = False
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
+        self.copy_started_at: float | None = None
 
         self.config_path = tk.StringVar(value="config.json")
         self.rules_path = tk.StringVar(value="rules.json")
@@ -135,6 +137,17 @@ class AnonymizerApp(tk.Tk):
         self.copy_button = ttk.Button(actions, text="Copy selected tables", command=self._copy)
         self.copy_button.pack(side="right")
 
+        progress_panel = ttk.Frame(self, padding=(12, 0, 12, 4))
+        progress_panel.pack(fill="x")
+        ttk.Label(progress_panel, text="Overall copy progress").pack(anchor="w")
+        self.overall_progress = ttk.Progressbar(progress_panel, mode="determinate", maximum=1, value=0)
+        self.overall_progress.pack(fill="x", pady=(0, 3))
+        ttk.Label(progress_panel, text="Current table").pack(anchor="w")
+        self.table_progress = ttk.Progressbar(progress_panel, mode="determinate", maximum=1, value=0)
+        self.table_progress.pack(fill="x", pady=(0, 4))
+        self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
+        ttk.Label(progress_panel, textvariable=self.status).pack(anchor="w")
+
         self.tabs_widget = ttk.Notebook(self)
         self.tabs_widget.pack(fill="both", expand=True, padx=12, pady=8)
         self.connection_tab = ttk.Frame(self.tabs_widget, padding=16)
@@ -153,14 +166,10 @@ class AnonymizerApp(tk.Tk):
         self._build_lookup()
         self._build_browse()
 
-        footer = ttk.Frame(self, padding=(12, 4, 12, 12))
-        footer.pack(fill="both")
-        self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
-        self.progress = ttk.Progressbar(footer, mode="determinate", maximum=1, value=0)
-        self.progress.pack(fill="x", pady=(0, 4))
-        ttk.Label(footer, textvariable=self.status).pack(anchor="w", pady=(0, 4))
-        self.output = tk.Text(footer, height=8, wrap="word", state="disabled")
-        self.output.pack(fill="both", expand=True)
+        footer = ttk.Frame(self, padding=(12, 4, 12, 8))
+        footer.pack(fill="x")
+        self.output = tk.Text(footer, height=4, wrap="word", state="disabled")
+        self.output.pack(fill="x")
 
     def _config_path_row(self, parent: ttk.Frame, row: int) -> None:
         ttk.Label(parent, text="Config", width=22).grid(row=row, column=0, sticky="w", pady=2)
@@ -881,12 +890,14 @@ class AnonymizerApp(tk.Tk):
             if moved:
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
             destination = connect_with_guidance("destination", config["destination"])
+            self.messages.put(("progress", {"event": "copy_started"}))
             counts = copy_database(
                 source, destination, config["source"]["database"], rules,
                 config.get("batch_size", 500), allow_locks,
                 mapping_path, selected, include_dependencies,
                 lambda progress: self.messages.put(("progress", progress)),
             )
+            self.messages.put(("progress", {"event": "copy_finished"}))
             if mapping_path:
                 self.messages.put(("lookup_fields", list_mapping_fields(mapping_path)))
             copied = set(counts)
@@ -973,13 +984,17 @@ class AnonymizerApp(tk.Tk):
                 self._lookup_table_selected()
                 self._log(f"Loaded {len(tables)} mapped table(s) and their columns.")
             elif kind == "error":
-                self.status.set("Operation failed.")
+                if self.copy_started_at is not None:
+                    elapsed = time.monotonic() - self.copy_started_at
+                    self.status.set(f"Operation failed after {self._format_duration(elapsed)}.")
+                else:
+                    self.status.set("Operation failed.")
+                self.copy_started_at = None
                 self._log("Error: " + value)
                 messagebox.showerror("Operation failed", value)
             elif kind == "done":
-                if not self.status.get().startswith("Showing "):
+                if not self.status.get().startswith(("Showing ", "Copy complete.")):
                     self.status.set("Ready.")
-                self.progress.configure(value=self.progress.cget("maximum"))
             if kind in {"error", "done"}:
                 self.busy = False
                 self._set_busy(False)
@@ -1028,25 +1043,73 @@ class AnonymizerApp(tk.Tk):
 
     def _show_progress(self, progress: dict[str, Any]) -> None:
         event = progress["event"]
+        if event == "copy_started":
+            self.copy_started_at = time.monotonic()
+            self.overall_progress.configure(maximum=1, value=0)
+            self.table_progress.configure(maximum=1, value=0)
+            self.status.set("Preparing copy… Elapsed 00:00:00 · ETA calculating")
+            return
+        if event == "copy_finished":
+            elapsed = time.monotonic() - self.copy_started_at if self.copy_started_at is not None else 0
+            self.overall_progress.configure(value=self.overall_progress.cget("maximum"))
+            self.table_progress.configure(value=self.table_progress.cget("maximum"))
+            self.status.set(f"Copy complete. Time taken: {self._format_duration(elapsed)}.")
+            self.copy_started_at = None
+            return
         total_rows = progress.get("total_rows", 0)
         total_tables = progress.get("total_tables", 0)
         if event == "start":
-            maximum = total_rows if total_rows else max(total_tables, 1)
-            self.progress.configure(maximum=maximum, value=0)
-            self.status.set(f"Copying {total_tables} table(s), {total_rows} row(s)…")
+            self.overall_progress.configure(maximum=max(total_tables, 1), value=0)
+            self.table_progress.configure(maximum=1, value=0)
+            self.status.set(self._progress_status(
+                f"Preparing {total_tables} table(s), {total_rows} row(s)", 0, total_rows, 0, total_tables,
+            ))
             return
         table = progress.get("table", "")
         table_index = progress.get("table_index", 0)
         table_rows = progress.get("table_rows", 0)
         copied_rows = progress.get("copied_rows", 0)
-        if total_rows:
-            self.progress.configure(value=progress.get("completed_rows", 0))
+        if event == "table":
+            self.overall_progress.configure(value=max(0, table_index - 1))
+            self.table_progress.configure(maximum=max(table_rows, 1), value=0)
+        elif event == "batch":
+            table_fraction = copied_rows / table_rows if table_rows else 0
+            self.overall_progress.configure(value=max(0, table_index - 1 + table_fraction))
+            self.table_progress.configure(maximum=max(table_rows, 1), value=copied_rows)
         elif event == "table_done":
-            self.progress.configure(value=progress.get("completed_tables", 0))
-        self.status.set(
+            self.overall_progress.configure(value=progress.get("completed_tables", table_index))
+            self.table_progress.configure(maximum=max(table_rows, 1), value=max(table_rows, 1))
+        self.status.set(self._progress_status(
             f"Copying table {table_index}/{total_tables}: {table} "
-            f"({copied_rows}/{table_rows} rows; {progress.get('completed_rows', 0)}/{total_rows} total)"
-        )
+            f"({copied_rows}/{table_rows} rows; {progress.get('completed_rows', 0)}/{total_rows} total)",
+            progress.get("completed_rows", 0), total_rows,
+            progress.get("completed_tables", table_index - 1), total_tables,
+        ))
+
+    def _progress_status(self, description: str, completed_rows: int, total_rows: int,
+                         completed_tables: int, total_tables: int) -> str:
+        elapsed = time.monotonic() - self.copy_started_at if self.copy_started_at is not None else 0
+        if total_rows:
+            completed, total = completed_rows, total_rows
+        else:
+            completed, total = completed_tables, total_tables
+        if completed > 0 and total > completed:
+            eta = self._format_duration(elapsed * (total - completed) / completed)
+        elif completed >= total and total > 0:
+            eta = "finishing"
+        else:
+            eta = "calculating"
+        return f"{description} · Elapsed {self._format_duration(elapsed)} · ETA {eta}"
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total_seconds = max(0, int(seconds))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours >= 24:
+            days, hours = divmod(hours, 24)
+            return f"{days}d {hours:02}:{minutes:02}:{secs:02}"
+        return f"{hours:02}:{minutes:02}:{secs:02}"
 
     def _select_all(self) -> None:
         self.table_list.select_set(0, "end")
