@@ -97,6 +97,36 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
     return result
 
 
+def resolve_table_selection(tables: list[dict[str, Any]], selected_tables: list[str] | None,
+                            include_dependencies: bool = False) -> list[str]:
+    available = {table["name"] for table in tables}
+    if selected_tables is None:
+        return [table["name"] for table in tables]
+    if not selected_tables:
+        raise ValueError("Select at least one table to copy")
+    unknown = sorted(set(selected_tables) - available)
+    if unknown:
+        raise ValueError("Unknown source table(s): " + ", ".join(unknown))
+
+    selected = set(selected_tables)
+    if include_dependencies:
+        by_name = {table["name"]: table for table in tables}
+        pending = list(selected)
+        while pending:
+            current = pending.pop()
+            for dependency in by_name[current].get("references", []):
+                if dependency not in selected:
+                    selected.add(dependency)
+                    pending.append(dependency)
+    else:
+        missing = sorted({ref for table in tables if table["name"] in selected
+                          for ref in table.get("references", []) if ref not in selected})
+        if missing:
+            raise ValueError("Selected tables reference tables that are not selected: "
+                             + ", ".join(missing) + ". Include these dependencies with --table or use --include-dependencies")
+    return [table["name"] for table in tables if table["name"] in selected]
+
+
 def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
     rules: dict[str, Any] = {"confirm_copy_password_hashes": False, "tables": {}}
     for table in tables:
@@ -248,24 +278,11 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
 
 def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
                   allow_source_table_locks: bool = False, mapping_store: str | None = None,
-                  selected_tables: list[str] | None = None) -> dict[str, int]:
+                  selected_tables: list[str] | None = None,
+                  include_dependencies: bool = False) -> dict[str, int]:
     all_tables = inspect_schema(source, schema)
-    available = {t["name"] for t in all_tables}
-    if selected_tables is None:
-        tables = all_tables
-    else:
-        if not selected_tables:
-            raise ValueError("Select at least one table to copy")
-        unknown = sorted(set(selected_tables) - available)
-        if unknown:
-            raise ValueError("Unknown source table(s): " + ", ".join(unknown))
-        selected = set(selected_tables)
-        missing = sorted({ref for t in all_tables if t["name"] in selected
-                          for ref in t.get("references", []) if ref not in selected})
-        if missing:
-            raise ValueError("Selected tables reference tables that are not selected: "
-                             + ", ".join(missing) + ". Include these dependencies with --table")
-        tables = [t for t in all_tables if t["name"] in selected]
+    selected_names = set(resolve_table_selection(all_tables, selected_tables, include_dependencies))
+    tables = [table for table in all_tables if table["name"] in selected_names]
     non_transactional = [t["name"] for t in tables if t["engine"] != "InnoDB"]
     if non_transactional and not allow_source_table_locks:
         names = ", ".join(non_transactional)

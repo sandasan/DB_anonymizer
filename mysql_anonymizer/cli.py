@@ -30,6 +30,8 @@ def main() -> None:
             p.add_argument("--mapping-store", help="SQLite file for bidirectional value lookups")
             p.add_argument("--table", action="append", dest="selected_tables",
                            help="Table to copy; repeat to select multiple tables (default: all)")
+            p.add_argument("--include-dependencies", action="store_true",
+                           help="Automatically include referenced tables, recursively")
         if command == "lookup":
             p.add_argument("--mapping-store", required=True)
             p.add_argument("--table", required=True)
@@ -81,10 +83,18 @@ def main() -> None:
                     cur.close()
                     counts = copy_database(source, destination, config["source"]["database"], rules,
                                            config.get("batch_size", 500), config.get("allow_source_table_locks", False),
-                                           args.mapping_store, args.selected_tables)
-                    print("Copy complete:")
+                                           args.mapping_store, args.selected_tables, args.include_dependencies)
+                    copied = set(counts)
+                    print("Copy complete. Copied tables:")
                     for table, count in counts.items():
                         print(f"  {table}: {count} rows")
+                    not_copied = [table["name"] for table in tables if table["name"] not in copied]
+                    print("Not copied tables:")
+                    if not_copied:
+                        for table in not_copied:
+                            print(f"  {table}")
+                    else:
+                        print("  (none)")
                 finally:
                     destination.close()
         finally:
