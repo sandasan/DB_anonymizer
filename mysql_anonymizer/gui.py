@@ -57,6 +57,7 @@ class AnonymizerApp(tk.Tk):
         self.minsize(800, 620)
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
+        self.copied_table_names: set[str] = set()
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
 
@@ -171,7 +172,7 @@ class AnonymizerApp(tk.Tk):
         self.table_list.configure(yscrollcommand=scrollbar.set)
         self.table_list.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        ttk.Label(self.tables_tab, text="Select one or more tables. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
+        ttk.Label(self.tables_tab, text="✓ marks tables already present in the destination. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
 
     def _build_rules(self) -> None:
         toolbar = ttk.Frame(self.rules_tab)
@@ -502,9 +503,26 @@ class AnonymizerApp(tk.Tk):
         source = connect_with_guidance("source", config["source"])
         try:
             tables = inspect_schema(source, config["source"]["database"])
-            self.messages.put(("tables", tables))
         finally:
             source.close()
+        destination_tables: set[str] = set()
+        destination = None
+        try:
+            destination = connect_with_guidance("destination", config["destination"])
+            cur = destination.cursor()
+            cur.execute(
+                "SELECT TABLE_NAME FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'",
+                (config["destination"]["database"],),
+            )
+            destination_tables = {row[0] for row in cur.fetchall()}
+            cur.close()
+        except Exception as exc:
+            self.messages.put(("log", f"Could not check destination tables for copy marks: {exc}"))
+        finally:
+            if destination is not None:
+                destination.close()
+        self.messages.put(("tables", (tables, destination_tables)))
 
     def _copy(self) -> None:
         if not self.tables:
@@ -601,6 +619,7 @@ class AnonymizerApp(tk.Tk):
             report.append("Not copied tables:")
             report.extend(f"  {name}" for name in not_copied) if not_copied else report.append("  (none)")
             self.messages.put(("log", "\n".join(report)))
+            self.messages.put(("copied_tables", set(counts)))
         finally:
             if destination is not None:
                 destination.close()
@@ -629,14 +648,13 @@ class AnonymizerApp(tk.Tk):
             except queue.Empty:
                 break
             if kind == "tables":
-                self.tables = value
+                self.tables, self.copied_table_names = value
                 self.table_names = [table["name"] for table in self.tables]
-                self.table_list.delete(0, "end")
-                for table in self.tables:
-                    refs = table.get("references", [])
-                    suffix = f"  [references: {', '.join(refs)}]" if refs else ""
-                    self.table_list.insert("end", f"{table['name']}{suffix}")
+                self._render_source_tables()
                 self._log(f"Found {len(self.tables)} source tables.")
+            elif kind == "copied_tables":
+                self.copied_table_names.update(value)
+                self._render_source_tables()
             elif kind == "log":
                 self._log(value)
             elif kind == "progress":
@@ -698,6 +716,17 @@ class AnonymizerApp(tk.Tk):
     def _clear_browse_rows(self) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
         self.browse_tree.configure(columns=())
+
+    def _render_source_tables(self) -> None:
+        self.table_list.delete(0, "end")
+        for index, table in enumerate(self.tables):
+            name = table["name"]
+            mark = "✓ " if name in self.copied_table_names else "  "
+            refs = table.get("references", [])
+            suffix = f"  [references: {', '.join(refs)}]" if refs else ""
+            self.table_list.insert("end", f"{mark}{name}{suffix}")
+            if name in self.copied_table_names:
+                self.table_list.itemconfig(index, foreground="#16803c")
 
     def _display_browse_rows(self, columns: list[str], rows: list[tuple[Any, ...]]) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
