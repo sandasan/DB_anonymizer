@@ -74,7 +74,7 @@ class AnonymizerApp(tk.Tk):
         paths = ttk.Frame(self, padding=(12, 12, 12, 4))
         paths.pack(fill="x")
         self._config_path_row(paths, 0)
-        self._path_row(paths, 1, "Rules", self.rules_path, self._choose_rules)
+        self._rules_path_row(paths, 1)
         self._path_row(paths, 2, "Mapping store (optional)", self.mapping_path, self._choose_mapping)
 
         self.tabs_widget = ttk.Notebook(self)
@@ -119,6 +119,13 @@ class AnonymizerApp(tk.Tk):
         ttk.Entry(parent, textvariable=self.config_path).grid(row=row, column=1, sticky="ew", padx=8, pady=2)
         ttk.Button(parent, text="Load config…", command=self._choose_config).grid(row=row, column=2, padx=(0, 4), pady=2)
         ttk.Button(parent, text="Save config as…", command=self._save_config_as).grid(row=row, column=3, pady=2)
+        parent.columnconfigure(1, weight=1)
+
+    def _rules_path_row(self, parent: ttk.Frame, row: int) -> None:
+        ttk.Label(parent, text="Rules", width=22).grid(row=row, column=0, sticky="w", pady=2)
+        ttk.Entry(parent, textvariable=self.rules_path).grid(row=row, column=1, sticky="ew", padx=8, pady=2)
+        ttk.Button(parent, text="Load rules…", command=self._choose_rules).grid(row=row, column=2, padx=(0, 4), pady=2)
+        ttk.Button(parent, text="Save rules as…", command=self._save_rules_as).grid(row=row, column=3, pady=2)
         parent.columnconfigure(1, weight=1)
 
     def _path_row(self, parent: ttk.Frame, row: int, label: str, var: tk.StringVar, browse) -> None:
@@ -354,6 +361,16 @@ class AnonymizerApp(tk.Tk):
         if path:
             self.rules_path.set(path)
             self._load_rules()
+
+    def _save_rules_as(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Save rules as",
+            defaultextension=".json",
+            filetypes=(("JSON files", "*.json"), ("All files", "*")),
+        )
+        if path:
+            self.rules_path.set(path)
+            self._save_rules()
 
     def _choose_mapping(self) -> None:
         path = filedialog.askopenfilename(
