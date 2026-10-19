@@ -21,6 +21,32 @@ from .core import (
 )
 
 
+def connect_with_guidance(role: str, settings: dict[str, Any]):
+    try:
+        return connect(settings)
+    except Exception as exc:
+        host = settings.get("host", "localhost")
+        port = settings.get("port", 3306)
+        database = settings.get("database", "<не указана>")
+        user = settings.get("user", "<не указан>")
+        errno = getattr(exc, "errno", None)
+        if errno == 1045:
+            hint = ("MySQL отклонил аутентификацию (ошибка 1045). Проверьте, что пользователь существует "
+                    "для указанного host, пароль верен и аккаунту разрешено подключаться с этой машины. "
+                    "По этой ошибке нельзя отличить отсутствующего пользователя от неверного пароля или host.")
+        elif errno == 1044:
+            hint = ("MySQL не разрешил пользователю доступ к указанной базе (ошибка 1044). "
+                    "Проверьте GRANT-права пользователя на эту базу.")
+        elif errno == 1049:
+            hint = "MySQL не нашёл указанную базу (ошибка 1049). Проверьте имя базы в настройках."
+        else:
+            hint = "Проверьте, что сервер доступен, порт верен, а пользователь и его права настроены правильно."
+        raise RuntimeError(
+            f"Не удалось подключиться к {role}: база {database!r}, пользователь {user!r}, "
+            f"сервер {host}:{port}. {hint}\nДетали MySQL: {exc}"
+        ) from exc
+
+
 class AnonymizerApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -69,6 +95,8 @@ class AnonymizerApp(tk.Tk):
         self.save_config_button.pack(side="left")
         self.inspect_button = ttk.Button(buttons, text="Inspect source", command=self._inspect)
         self.inspect_button.pack(side="left", padx=8)
+        self.test_connections_button = ttk.Button(buttons, text="Test connections", command=self._test_connections)
+        self.test_connections_button.pack(side="left")
         self.copy_button = ttk.Button(buttons, text="Copy selected tables", command=self._copy)
         self.copy_button.pack(side="right")
         self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
@@ -229,8 +257,29 @@ class AnonymizerApp(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Invalid connection settings", str(exc))
 
+    def _test_connections(self) -> None:
+        try:
+            config = self._config()
+            self._run_async("Testing source and destination connections…", self._test_connections_worker, config)
+        except Exception as exc:
+            messagebox.showerror("Invalid connection settings", str(exc))
+
+    def _test_connections_worker(self, config: dict[str, Any]) -> None:
+        reports = []
+        for role in ("source", "destination"):
+            conn = None
+            try:
+                conn = connect_with_guidance(role, config[role])
+                reports.append(f"✓ {role}: подключение успешно ({config[role].get('database')}).")
+            except Exception as exc:
+                reports.append(f"✗ {role}: {exc}")
+            finally:
+                if conn is not None:
+                    conn.close()
+        self.messages.put(("connection_report", "\n\n".join(reports)))
+
     def _inspect_worker(self, config: dict[str, Any]) -> None:
-        source = connect(config["source"])
+        source = connect_with_guidance("source", config["source"])
         try:
             tables = inspect_schema(source, config["source"]["database"])
             self.messages.put(("tables", tables))
@@ -267,7 +316,7 @@ class AnonymizerApp(tk.Tk):
     def _copy_worker(self, config: dict[str, Any], rules: dict[str, Any], selected: list[str],
                      mapping_path: str | None, rules_path: str, allow_locks: bool,
                      include_dependencies: bool) -> None:
-        source = connect(config["source"])
+        source = connect_with_guidance("source", config["source"])
         destination = None
         try:
             tables = inspect_schema(source, config["source"]["database"])
@@ -275,7 +324,7 @@ class AnonymizerApp(tk.Tk):
             if moved:
                 save_json_atomic(rules_path, rules)
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
-            destination = connect(config["destination"])
+            destination = connect_with_guidance("destination", config["destination"])
             cur = destination.cursor()
             cur.execute("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s",
                         (config["destination"]["database"],))
@@ -333,6 +382,9 @@ class AnonymizerApp(tk.Tk):
                 self._log(f"Found {len(self.tables)} source tables.")
             elif kind == "log":
                 self._log(value)
+            elif kind == "connection_report":
+                self._log(value)
+                messagebox.showinfo("Connection test", value)
             elif kind == "error":
                 self.status.set("Operation failed.")
                 self._log("Error: " + value)
@@ -346,7 +398,7 @@ class AnonymizerApp(tk.Tk):
 
     def _set_busy(self, busy: bool) -> None:
         state = "disabled" if busy else "normal"
-        for widget in (self.save_config_button, self.inspect_button, self.copy_button):
+        for widget in (self.save_config_button, self.inspect_button, self.test_connections_button, self.copy_button):
             widget.configure(state=state)
 
     def _select_all(self) -> None:
