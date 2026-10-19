@@ -84,7 +84,15 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
     result = []
     for t in tables:
         cur.execute("SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION", (schema, t["TABLE_NAME"]))
-        result.append({"name": t["TABLE_NAME"], "engine": t["ENGINE"], "columns": cur.fetchall()})
+        columns = cur.fetchall()
+        cur.execute("""SELECT DISTINCT REFERENCED_TABLE_NAME AS table_name
+                       FROM information_schema.KEY_COLUMN_USAGE
+                       WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s
+                         AND REFERENCED_TABLE_NAME IS NOT NULL""",
+                    (schema, t["TABLE_NAME"]))
+        references = [row["table_name"] for row in cur.fetchall()]
+        result.append({"name": t["TABLE_NAME"], "engine": t["ENGINE"],
+                       "columns": columns, "references": references})
     cur.close()
     return result
 
@@ -239,13 +247,30 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
 
 
 def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
-                  allow_source_table_locks: bool = False, mapping_store: str | None = None) -> dict[str, int]:
-    tables = inspect_schema(source, schema)
+                  allow_source_table_locks: bool = False, mapping_store: str | None = None,
+                  selected_tables: list[str] | None = None) -> dict[str, int]:
+    all_tables = inspect_schema(source, schema)
+    available = {t["name"] for t in all_tables}
+    if selected_tables is None:
+        tables = all_tables
+    else:
+        if not selected_tables:
+            raise ValueError("Select at least one table to copy")
+        unknown = sorted(set(selected_tables) - available)
+        if unknown:
+            raise ValueError("Unknown source table(s): " + ", ".join(unknown))
+        selected = set(selected_tables)
+        missing = sorted({ref for t in all_tables if t["name"] in selected
+                          for ref in t.get("references", []) if ref not in selected})
+        if missing:
+            raise ValueError("Selected tables reference tables that are not selected: "
+                             + ", ".join(missing) + ". Include these dependencies with --table")
+        tables = [t for t in all_tables if t["name"] in selected]
     non_transactional = [t["name"] for t in tables if t["engine"] != "InnoDB"]
     if non_transactional and not allow_source_table_locks:
         names = ", ".join(non_transactional)
         raise ValueError(f"Non-InnoDB source tables found ({names}). Set allow_source_table_locks=true only if it is acceptable to block writes to all source tables during the copy")
-    validate_rules(tables, rules)
+    validate_rules(all_tables, rules)
     dst, src = destination.cursor(), source.cursor()
     counts: dict[str, int] = {}
     mapping_db = open_mapping_store(mapping_store) if mapping_store else None

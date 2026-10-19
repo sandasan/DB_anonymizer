@@ -28,6 +28,8 @@ def main() -> None:
         if command == "copy":
             p.add_argument("--rules", required=True)
             p.add_argument("--mapping-store", help="SQLite file for bidirectional value lookups")
+            p.add_argument("--table", action="append", dest="selected_tables",
+                           help="Table to copy; repeat to select multiple tables (default: all)")
         if command == "lookup":
             p.add_argument("--mapping-store", required=True)
             p.add_argument("--table", required=True)
@@ -79,7 +81,7 @@ def main() -> None:
                     cur.close()
                     counts = copy_database(source, destination, config["source"]["database"], rules,
                                            config.get("batch_size", 500), config.get("allow_source_table_locks", False),
-                                           args.mapping_store)
+                                           args.mapping_store, args.selected_tables)
                     print("Copy complete:")
                     for table, count in counts.items():
                         print(f"  {table}: {count} rows")
