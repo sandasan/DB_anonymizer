@@ -369,7 +369,7 @@ class AnonymizerApp(tk.Tk):
                 settings = config.get(role, {})
                 for key, var in self.connection_fields[role].items():
                     var.set(str(settings.get(key, "127.0.0.1" if key == "host" else "3306" if key == "port" else "")))
-                self.password_fields[role].set("")
+                self.password_fields[role].set(str(settings.get("password", "")))
             self.allow_locks.set(bool(config.get("allow_source_table_locks", False)))
             self._log(f"Loaded config from {self.config_path.get()}. Passwords remain in the configured environment variables.")
         except Exception as exc:
@@ -382,6 +382,7 @@ class AnonymizerApp(tk.Tk):
             config = {}
         for role in ("source", "destination"):
             old = dict(config.get(role, {}))
+            old.pop("password", None)
             for key, var in self.connection_fields[role].items():
                 value = var.get().strip()
                 old[key] = int(value) if key == "port" and value else value
@@ -397,12 +398,10 @@ class AnonymizerApp(tk.Tk):
     def _save_config(self) -> None:
         try:
             config = self._config()
-            for role in ("source", "destination"):
-                config[role].pop("password", None)
             with open(self.config_path.get(), "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
                 f.write("\n")
-            self._log(f"Saved connection settings to {self.config_path.get()}. Password fields were not saved.")
+            self._log(f"Saved connection settings and entered passwords to {self.config_path.get()}.")
         except Exception as exc:
             messagebox.showerror("Could not save config", str(exc))
 
