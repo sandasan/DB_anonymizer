@@ -821,6 +821,10 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     completed[progress["table"]] = progress["copied_rows"]
                     resume_state["completed_counts"] = completed
                     self._save_copy_checkpoint(resume_state)
+                    self.messages.put((
+                        "table_copied",
+                        (progress["table"], action, self._destination_identity(config)),
+                    ))
                 if progress.get("event") in {"start", "table", "table_done"}:
                     self._diagnostic(
                         "copy_progress",
@@ -947,6 +951,20 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     self.recreated_table_names.update(copied_names)
                     self.recreated_tables_by_destination[identity_key] = set(self.recreated_table_names)
                 self._table_selected_names.difference_update(copied_names)
+                self._render_source_tables()
+                self._save_last_paths()
+            elif kind == "table_copied":
+                table_name, action, destination_identity = value
+                self.copied_table_names.add(table_name)
+                if action in {"replace_tables", "recreate_database"}:
+                    identity_key = self._destination_identity_key(destination_identity)
+                    if self.recreated_destination_identity != destination_identity:
+                        self.recreated_table_names = set(
+                            self.recreated_tables_by_destination.get(identity_key, set())
+                        )
+                    self.recreated_destination_identity = destination_identity
+                    self.recreated_table_names.add(table_name)
+                    self.recreated_tables_by_destination[identity_key] = set(self.recreated_table_names)
                 self._render_source_tables()
                 self._save_last_paths()
             elif kind == "destination_data_cleared":
