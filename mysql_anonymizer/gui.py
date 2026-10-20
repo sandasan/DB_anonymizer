@@ -817,6 +817,19 @@ class AnonymizerApp(tk.Tk):
         source = connect_with_guidance("source", config["source"])
         try:
             tables = inspect_schema(source, config["source"]["database"])
+            cursor = source.cursor()
+            cursor.execute(
+                "SELECT TABLE_NAME, DATA_LENGTH, INDEX_LENGTH "
+                "FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'",
+                (config["source"]["database"],),
+            )
+            sizes = {name: (data_length or 0) + (index_length or 0)
+                     for name, data_length, index_length in cursor.fetchall()}
+            for table in tables:
+                cursor.execute(f"SELECT COUNT(*) FROM `{table['name'].replace('`', '``')}`")
+                table["row_count"] = cursor.fetchone()[0]
+                table["size_bytes"] = sizes.get(table["name"], 0)
+            cursor.close()
         finally:
             source.close()
         destination_tables: set[str] = set()
@@ -1173,15 +1186,33 @@ class AnonymizerApp(tk.Tk):
         self.browse_tree.configure(columns=())
 
     def _render_source_tables(self) -> None:
+        selected_names = {self.table_names[index] for index in self.table_list.curselection()
+                          if index < len(self.table_names)}
         self.table_list.delete(0, "end")
         for index, table in enumerate(self.tables):
             name = table["name"]
             mark = "✓ " if name in self.copied_table_names else "  "
             refs = table.get("references", [])
             suffix = f"  [references: {', '.join(refs)}]" if refs else ""
-            self.table_list.insert("end", f"{mark}{name}{suffix}")
+            count = f"{table['row_count']:,} rows" if "row_count" in table else "rows —"
+            size = self._format_size(table.get("size_bytes"))
+            eta = table.get("copy_eta", "—")
+            self.table_list.insert("end", f"{mark}{name}  |  {count}  |  {size}  |  ETA {eta}{suffix}")
+            if name in selected_names:
+                self.table_list.select_set(index)
             if name in self.copied_table_names:
                 self.table_list.itemconfig(index, foreground="#16803c")
+
+    @staticmethod
+    def _format_size(size_bytes: int | None) -> str:
+        if size_bytes is None:
+            return "size —"
+        value = float(size_bytes)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if value < 1024 or unit == "TB":
+                return f"{value:.1f} {unit}"
+            value /= 1024
+        return "0 B"
 
     def _display_browse_rows(self, columns: list[str], rows: list[tuple[Any, ...]]) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
@@ -1233,6 +1264,17 @@ class AnonymizerApp(tk.Tk):
         table_index = progress.get("table_index", 0)
         table_rows = progress.get("table_rows", 0)
         copied_rows = progress.get("copied_rows", 0)
+        if event in {"table", "batch", "table_done"}:
+            elapsed = time.monotonic() - self.copy_started_at if self.copy_started_at is not None else 0
+            completed_rows = progress.get("completed_rows", 0)
+            rate = completed_rows / elapsed if elapsed > 0 and completed_rows > 0 else 0
+            for item in self.tables:
+                rows = item.get("row_count")
+                if rate > 0 and rows is not None:
+                    item["copy_eta"] = self._format_duration(rows / rate)
+                else:
+                    item["copy_eta"] = "calculating"
+            self._render_source_tables()
         if event == "table":
             self.overall_progress.configure(value=max(0, table_index - 1))
             self.table_progress.configure(maximum=max(table_rows, 1), value=0)
