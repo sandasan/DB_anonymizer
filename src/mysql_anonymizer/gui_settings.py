@@ -121,8 +121,7 @@ class SettingsMixin:
             tables_view = {}
         else:
             tables_view = dict(tables_view)
-        selected_tables = [self.table_list.item(item, "values")[1]
-                           for item in self.table_list.selection()] if self.tables else self.saved_table_selection
+        selected_tables = self._selected_table_names() if self.tables else self.saved_table_selection
         tables_view.update({
             "include_dependencies": self.include_dependencies.get(),
             "selected_tables": selected_tables,
@@ -134,6 +133,7 @@ class SettingsMixin:
     def _restore_table_selection(self) -> None:
         available = set(self.table_names)
         wanted = set(self.saved_table_selection) & available
+        self._table_selected_names = set(wanted)
         self.table_list.selection_remove(self.table_list.selection())
         for item_id in self.table_list.get_children():
             if self.table_list.item(item_id, "values")[1] in wanted:

@@ -425,7 +425,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         if self.copy_resume_state is not None:
             messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before recreating tables.")
             return
-        selected = [self.table_list.item(item, "values")[1] for item in self.table_list.selection()]
+        selected = self._selected_table_names()
         if not selected:
             messagebox.showinfo("Select tables", "Select the source tables to recreate in the destination.")
             return
@@ -507,8 +507,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 "so you will not be able to look up original and anonymized values later. Continue?",
             ):
                 return
-            selected = [self.table_list.item(item, "values")[1]
-                        for item in self.table_list.selection()]
+            selected = self._selected_table_names()
             if action == "recreate_database":
                 selected = [table["name"] for table in self.tables]
             if not selected:

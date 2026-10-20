@@ -145,6 +145,25 @@ class ViewMixin:
         self.recreate_database_button.pack(side="right")
         ttk.Checkbutton(toolbar, text="Include referenced tables automatically", variable=self.include_dependencies).pack(side="left", padx=12)
         ttk.Checkbutton(toolbar, text="Allow source table locks for non-InnoDB", variable=self.allow_locks).pack(side="left", padx=12)
+        filter_bar = ttk.Frame(self.tables_tab)
+        filter_bar.pack(fill="x", pady=(0, 6))
+        ttk.Label(filter_bar, text="Filter tables").pack(side="left")
+        self.table_filter = tk.StringVar()
+        filter_entry = ttk.Entry(filter_bar, textvariable=self.table_filter, width=36)
+        filter_entry.pack(side="left", padx=(8, 10))
+        ttk.Button(filter_bar, text="Clear", command=lambda: self.table_filter.set("")).pack(side="left")
+        self.hide_copied_tables = tk.BooleanVar(value=False)
+        self.hide_not_copied_tables = tk.BooleanVar(value=False)
+        ttk.Checkbutton(filter_bar, text="Hide copied", variable=self.hide_copied_tables,
+                        command=self._render_source_tables).pack(side="left", padx=(12, 4))
+        ttk.Checkbutton(filter_bar, text="Hide not copied", variable=self.hide_not_copied_tables,
+                        command=self._render_source_tables).pack(side="left", padx=4)
+        self.table_filter_status = tk.StringVar(value="")
+        ttk.Label(filter_bar, textvariable=self.table_filter_status).pack(side="right")
+        self.table_sort_column = "table"
+        self.table_sort_reverse = False
+        self._table_heading_labels = {}
+        self._table_selected_names: set[str] = set()
         body = ttk.Frame(self.tables_tab)
         body.pack(fill="both", expand=True)
         self.table_list = ttk.Treeview(
@@ -156,12 +175,16 @@ class ViewMixin:
             ("records", "Records", 110), ("size", "Volume", 100),
             ("eta", "Copy ETA", 110), ("references", "References", 210),
         ):
-            self.table_list.heading(column, text=heading)
+            self._table_heading_labels[column] = heading
+            self.table_list.heading(column, text=heading, command=lambda key=column: self._sort_source_tables(key))
             self.table_list.column(column, width=width, minwidth=70,
                                    anchor="w" if column in {"table", "references"} else "center")
         yscroll = ttk.Scrollbar(body, orient="vertical", command=self.table_list.yview)
         xscroll = ttk.Scrollbar(body, orient="horizontal", command=self.table_list.xview)
         self.table_list.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.table_list.bind("<<TreeviewSelect>>", self._sync_table_selection)
+        self.table_filter.trace_add("write", lambda *_args: self._render_source_tables())
+        self._update_table_sort_heading()
         self.table_list.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
         xscroll.grid(row=1, column=0, sticky="ew")
@@ -443,10 +466,31 @@ class ViewMixin:
         self.browse_tree.configure(columns=())
 
     def _render_source_tables(self) -> None:
-        selected_names = {self.table_list.item(item, "values")[1]
-                          for item in self.table_list.selection()}
+        self._sync_table_selection()
+        selected_names = self._table_selected_names
         self.table_list.delete(*self.table_list.get_children())
-        for index, table in enumerate(self.tables):
+        query = self.table_filter.get().strip().casefold()
+        indexed_tables = list(enumerate(self.tables))
+        if self.hide_copied_tables.get():
+            indexed_tables = [(index, table) for index, table in indexed_tables
+                              if table.get("name") not in self.copied_table_names]
+        if self.hide_not_copied_tables.get():
+            indexed_tables = [(index, table) for index, table in indexed_tables
+                              if table.get("name") in self.copied_table_names]
+        if query:
+            indexed_tables = [(index, table) for index, table in indexed_tables
+                              if query in " ".join((
+                                  "✓" if table.get("name") in self.copied_table_names else "",
+                                  table.get("name", ""),
+                                  str(table.get("row_count") if table.get("row_count") is not None else ""),
+                                  self._format_size(table.get("size_bytes")),
+                                  table.get("copy_eta", ""),
+                                  *table.get("references", []),
+                              )).casefold()]
+        self.table_filter_status.set(f"{len(indexed_tables):,} of {len(self.tables):,} tables")
+        indexed_tables.sort(key=lambda pair: self._table_sort_value(pair[1], self.table_sort_column),
+                            reverse=self.table_sort_reverse)
+        for index, table in indexed_tables:
             name = table["name"]
             mark = "✓" if name in self.copied_table_names else ""
             row_count = table.get("row_count")
@@ -469,6 +513,53 @@ class ViewMixin:
                 self.table_list.item(item_id, tags=("even" if index % 2 == 0 else "odd",))
         self.table_list.tag_configure("even", background="white")
         self.table_list.tag_configure("odd", background="#f7f9fc")
+
+    def _sync_table_selection(self, _event=None) -> None:
+        if not hasattr(self, "table_list"):
+            return
+        visible_names = {self.table_list.item(item, "values")[1]
+                         for item in self.table_list.get_children()}
+        selected_visible = {self.table_list.item(item, "values")[1]
+                            for item in self.table_list.selection()}
+        self._table_selected_names.difference_update(visible_names)
+        self._table_selected_names.update(selected_visible)
+
+    def _selected_table_names(self) -> list[str]:
+        self._sync_table_selection()
+        return [table["name"] for table in self.tables if table["name"] in self._table_selected_names]
+
+    def _sort_source_tables(self, column: str) -> None:
+        if self.table_sort_column == column:
+            self.table_sort_reverse = not self.table_sort_reverse
+        else:
+            self.table_sort_column = column
+            self.table_sort_reverse = False
+        self._update_table_sort_heading()
+        self._render_source_tables()
+
+    def _update_table_sort_heading(self) -> None:
+        if not hasattr(self, "table_list"):
+            return
+        for column, label in self._table_heading_labels.items():
+            marker = (" ▼" if self.table_sort_reverse else " ▲") if column == self.table_sort_column else ""
+            self.table_list.heading(column, text=label + marker)
+
+    def _table_sort_value(self, table: dict[str, Any], column: str):
+        if column == "status":
+            return table.get("name") not in self.copied_table_names
+        if column == "table":
+            return table.get("name", "").casefold()
+        if column == "records":
+            value = table.get("row_count")
+            return (value is None, value or 0)
+        if column == "size":
+            value = table.get("size_bytes")
+            return (value is None, value or 0)
+        if column == "eta":
+            return table.get("copy_eta", "").casefold()
+        if column == "references":
+            return ", ".join(table.get("references", [])).casefold()
+        return ""
 
     @staticmethod
     def _format_size(size_bytes: int | None) -> str:
@@ -501,7 +592,9 @@ class ViewMixin:
             self.browse_tree.insert("", "end", values=values)
 
     def _select_all(self) -> None:
+        self._table_selected_names = {table["name"] for table in self.tables}
         self.table_list.selection_set(self.table_list.get_children())
 
     def _clear_selection(self) -> None:
         self.table_list.selection_remove(self.table_list.selection())
+        self._table_selected_names.clear()
