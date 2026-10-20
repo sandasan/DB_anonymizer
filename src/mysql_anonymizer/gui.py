@@ -70,6 +70,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.copied_table_names: set[str] = set()
         self.recreated_table_names: set[str] = set()
         self.recreated_destination_identity: tuple[str, str, str] | None = None
+        self.recreated_tables_by_destination: dict[str, set[str]] = {}
         self.source_inspected = False
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
@@ -124,6 +125,13 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             snapshot = state.get("inspection_snapshot")
             if isinstance(snapshot, dict):
                 self.inspection_snapshot = snapshot
+            recreated = state.get("recreated_tables_by_destination", {})
+            if isinstance(recreated, dict):
+                self.recreated_tables_by_destination = {
+                    key: {name for name in names if isinstance(name, str)}
+                    for key, names in recreated.items()
+                    if isinstance(key, str) and isinstance(names, list)
+                }
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
 
@@ -144,6 +152,11 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             })
             if self.inspection_snapshot is not None:
                 state["inspection_snapshot"] = self.inspection_snapshot
+            state["recreated_tables_by_destination"] = {
+                key: sorted(names)
+                for key, names in self.recreated_tables_by_destination.items()
+                if names
+            }
             path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
             try:
                 path.chmod(0o600)
@@ -404,6 +417,10 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         return (str(destination.get("host", "")).casefold(),
                 str(destination.get("port", "3306")),
                 str(destination.get("database", "")).casefold())
+
+    @staticmethod
+    def _destination_identity_key(identity: tuple[str, str, str]) -> str:
+        return json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
 
     @staticmethod
     def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
@@ -778,10 +795,13 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             if kind == "tables":
                 self.tables, self.copied_table_names, config = value
                 destination_identity = self._destination_identity(config)
-                if self.recreated_destination_identity != destination_identity:
-                    self.recreated_table_names.clear()
-                    self.recreated_destination_identity = destination_identity
-                self.recreated_table_names.intersection_update(self.copied_table_names)
+                identity_key = self._destination_identity_key(destination_identity)
+                self.recreated_destination_identity = destination_identity
+                self.recreated_table_names = (
+                    self.recreated_tables_by_destination.get(identity_key, set())
+                    & self.copied_table_names
+                )
+                self.recreated_tables_by_destination[identity_key] = set(self.recreated_table_names)
                 self.table_names = [table["name"] for table in self.tables]
                 self.source_inspected = True
                 self.inspection_stale = False
@@ -818,12 +838,17 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 copied_names, action, destination_identity = value
                 self.copied_table_names.update(copied_names)
                 if action in {"replace_tables", "recreate_database"}:
+                    identity_key = self._destination_identity_key(destination_identity)
                     if self.recreated_destination_identity != destination_identity:
-                        self.recreated_table_names.clear()
-                        self.recreated_destination_identity = destination_identity
+                        self.recreated_table_names = set(
+                            self.recreated_tables_by_destination.get(identity_key, set())
+                        )
+                    self.recreated_destination_identity = destination_identity
                     self.recreated_table_names.update(copied_names)
+                    self.recreated_tables_by_destination[identity_key] = set(self.recreated_table_names)
                 self._table_selected_names.difference_update(copied_names)
                 self._render_source_tables()
+                self._save_last_paths()
             elif kind == "log":
                 self._log(value)
             elif kind == "operation_status":

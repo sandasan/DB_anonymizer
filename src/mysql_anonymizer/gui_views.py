@@ -154,9 +154,12 @@ class ViewMixin:
         ttk.Button(filter_bar, text="Clear", command=lambda: self.table_filter.set("")).pack(side="left")
         self.hide_copied_tables = tk.BooleanVar(value=False)
         self.hide_not_copied_tables = tk.BooleanVar(value=False)
+        self.hide_recreated_tables = tk.BooleanVar(value=False)
         ttk.Checkbutton(filter_bar, text="Hide copied", variable=self.hide_copied_tables,
                         command=self._render_source_tables).pack(side="left", padx=(12, 4))
         ttk.Checkbutton(filter_bar, text="Hide not copied", variable=self.hide_not_copied_tables,
+                        command=self._render_source_tables).pack(side="left", padx=4)
+        ttk.Checkbutton(filter_bar, text="Hide recreated", variable=self.hide_recreated_tables,
                         command=self._render_source_tables).pack(side="left", padx=4)
         self.table_filter_status = tk.StringVar(value="")
         ttk.Label(filter_bar, textvariable=self.table_filter_status).pack(side="right")
@@ -477,6 +480,9 @@ class ViewMixin:
         if self.hide_not_copied_tables.get():
             indexed_tables = [(index, table) for index, table in indexed_tables
                               if table.get("name") in self.copied_table_names]
+        if self.hide_recreated_tables.get():
+            indexed_tables = [(index, table) for index, table in indexed_tables
+                              if table.get("name") not in self.recreated_table_names]
         if query:
             indexed_tables = [(index, table) for index, table in indexed_tables
                               if query in " ".join((
