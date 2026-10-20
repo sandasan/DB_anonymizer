@@ -47,6 +47,12 @@ class ViewMixin:
         self.inspect_button.pack(side="left", padx=8)
         self.test_connections_button = ttk.Button(actions, text="Test connections", command=self._test_connections, width=17)
         self.test_connections_button.pack(side="left")
+        ttk.Checkbutton(
+            actions,
+            text="Auto-confirm copy/table actions",
+            variable=self.auto_confirm_operations,
+            command=self._save_last_paths,
+        ).pack(side="left", padx=12)
         self.copy_button = ttk.Button(actions, text="Copy selected tables", command=self._copy, style="Accent.TButton", width=22)
         self.copy_button.pack(side="right")
         self.pause_button = ttk.Button(actions, text="Pause copy", command=self._request_pause, state="disabled", width=14)

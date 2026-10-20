@@ -71,6 +71,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.recreated_table_names: set[str] = set()
         self.recreated_destination_identity: tuple[str, str, str] | None = None
         self.recreated_tables_by_destination: dict[str, set[str]] = {}
+        self.saved_auto_confirm_operations = False
         self.source_inspected = False
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
@@ -90,6 +91,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.rules_path = tk.StringVar(value="rules.json")
         self.mapping_path = tk.StringVar()
         self._load_last_paths()
+        self.auto_confirm_operations = tk.BooleanVar(value=self.saved_auto_confirm_operations)
         self.allow_locks = tk.BooleanVar(value=False)
         self.include_dependencies = tk.BooleanVar(value=False)
         self.saved_table_selection: list[str] = []
@@ -122,6 +124,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             mapping_path = state.get("mapping_path")
             if isinstance(mapping_path, str):
                 self.mapping_path.set(mapping_path)
+            self.saved_auto_confirm_operations = bool(state.get("auto_confirm_operations", False))
             snapshot = state.get("inspection_snapshot")
             if isinstance(snapshot, dict):
                 self.inspection_snapshot = snapshot
@@ -149,6 +152,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 "config_path": self.config_path.get(),
                 "rules_path": self.rules_path.get(),
                 "mapping_path": self.mapping_path.get(),
+                "auto_confirm_operations": self.auto_confirm_operations.get(),
             })
             if self.inspection_snapshot is not None:
                 state["inspection_snapshot"] = self.inspection_snapshot
@@ -480,11 +484,9 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 f"{names}\n\nDestination database: {destination}\n\nContinue?"
             )
             title = "Recreate destination tables"
-        if not messagebox.askyesno(
-            title,
-            prompt,
-        ):
-            return
+        if pending_state is not None or not self.auto_confirm_operations.get():
+            if not messagebox.askyesno(title, prompt):
+                return
         if pending_state is not None:
             try:
                 self._resume_copy_path().unlink(missing_ok=True)
@@ -550,7 +552,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                             config, self.inspection_snapshot)
             return
         self.copy_schema_verified = False
-        if action == "copy" and not messagebox.askyesno("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules."):
+        if (action == "copy" and not self.auto_confirm_operations.get()
+                and not messagebox.askyesno("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules.")):
             return
         try:
             raw = self.rules_editor.get("1.0", "end-1c").strip()
@@ -560,7 +563,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             if not rules.get("confirm_copy_password_hashes"):
                 raise ValueError("Set confirm_copy_password_hashes=true in the rules after reviewing the credential risk")
             mapping_path = self.mapping_path.get().strip() or None
-            if mapping_path is None and not messagebox.askyesno(
+            if mapping_path is None and not self.auto_confirm_operations.get() and not messagebox.askyesno(
                 "No mapping store selected",
                 "No mapping store is selected. The copy will continue without saving anonymization mappings, "
                 "so you will not be able to look up original and anonymized values later. Continue?",
@@ -589,7 +592,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 details = "\n".join(f"  {item}" for item in shown)
                 if len(stale_rules) > len(shown):
                     details += f"\n  … and {len(stale_rules) - len(shown)} more"
-                if not self._confirm_stale_rules(details):
+                if not self.auto_confirm_operations.get() and not self._confirm_stale_rules(details):
                     return
             rules_path = None if stale_rules else self.rules_path.get()
             allow_locks = self.allow_locks.get()
