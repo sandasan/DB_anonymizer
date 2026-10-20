@@ -27,6 +27,20 @@ def _quote_identifier(identifier: str) -> str:
     return f"`{identifier.replace('`', '``')}`"
 
 
+def _close_cursor_safely(connection, cursor) -> None:
+    try:
+        cursor.close()
+    except Exception:
+        try:
+            connection.consume_results()
+        except Exception:
+            pass
+        try:
+            cursor.close()
+        except Exception:
+            pass
+
+
 def drop_destination_tables(destination, table_names: list[str]) -> None:
     """Drop selected destination tables before recreating them from source."""
     cursor = destination.cursor()
@@ -38,8 +52,14 @@ def drop_destination_tables(destination, table_names: list[str]) -> None:
     finally:
         try:
             cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+        except Exception:
+            try:
+                destination.consume_results()
+                cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+            except Exception:
+                pass
         finally:
-            cursor.close()
+            _close_cursor_safely(destination, cursor)
 
 
 def recreate_destination_database(settings: dict[str, Any], source_settings: dict[str, Any]) -> None:
@@ -261,15 +281,25 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         if mapping_db is not None:
             mapping_db.commit()
     except Exception:
-        destination.rollback()
+        try:
+            destination.rollback()
+        except Exception:
+            pass
         if mapping_db is not None:
-            mapping_db.rollback()
+            try:
+                mapping_db.rollback()
+            except Exception:
+                pass
         raise
     finally:
         try:
             dst.execute("SET FOREIGN_KEY_CHECKS=1")
         except Exception:
-            pass
+            try:
+                destination.consume_results()
+                dst.execute("SET FOREIGN_KEY_CHECKS=1")
+            except Exception:
+                pass
         if source_locked:
             try:
                 source.rollback()
@@ -279,10 +309,13 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 src.execute("UNLOCK TABLES")
             except Exception:
                 pass
-        src.close()
-        dst.close()
+        _close_cursor_safely(source, src)
+        _close_cursor_safely(destination, dst)
         if mapping_db is not None:
             mapping_db.close()
         if not source_locked:
-            source.rollback()
+            try:
+                source.rollback()
+            except Exception:
+                pass
     return counts
