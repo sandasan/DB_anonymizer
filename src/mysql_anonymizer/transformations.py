@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -31,6 +32,17 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         return f"anon{digest}"
     if kind == "address":
         return f"{n % 9999 + 1} Example Street"
+    if kind == "ip_address":
+        try:
+            address = ipaddress.ip_address(str(value).strip())
+        except ValueError as exc:
+            raise ValueError(f"Invalid IP address in {table}.{column}") from exc
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).digest()
+        if address.version == 4:
+            replacement = ipaddress.IPv4Address(bytes((10, *digest[:3])))
+        else:
+            replacement = ipaddress.IPv6Address(bytes.fromhex("20010db8") + digest[:12])
+        return str(replacement)
     if kind == "date_shift":
         delta = timedelta(days=n % 7301 - 3650)
         if isinstance(value, (date, datetime)):

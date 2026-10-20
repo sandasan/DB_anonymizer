@@ -12,6 +12,7 @@ _TRANSFORM_MAX_LENGTH = {
     "phone": len("+1555") + 7,
     "name": len("Person") + 8,
     "address": len("9999 Example Street"),
+    "ip_address": 39,
     "unique": len("anon") + 64,
 }
 
@@ -74,9 +75,11 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
                     anonymize[name] = {"type": "email"}
             elif is_text and re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", hints):
                 anonymize[name] = {"type": "phone"}
+            elif is_text and ("ip" in tokens or "ipaddress" in tokens):
+                anonymize[name] = {"type": "ip_address"}
             elif is_text and re.search(r"first.?name|last.?name|full.?name|given.?name|family.?name|surname|^name$", hints):
                 anonymize[name] = {"type": "name"}
-            elif is_text and re.search(r"address|street|city|postal|zip", hints):
+            elif is_text and re.search(r"(^|_)(address|street|city|postal|zip)(_|[0-9]|$)", low):
                 anonymize[name] = {"type": "address"}
             elif data_type in _TEMPORAL_DATA_TYPES and re.search(r"birth|dob|date_of_birth", hints):
                 anonymize[name] = {"type": "date_shift"}
@@ -135,7 +138,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"{tn}.{col} is in both preserve and anonymize; remove it from anonymize")
             if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|token|secret|salt", col, re.I):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
-            if rule.get("type") in {"email", "phone", "name", "address", "unique"} and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
+            if rule.get("type") in {"email", "phone", "name", "address", "ip_address", "unique"} and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                 raise ValueError(
                     f"Text transformation {rule.get('type')!r} configured for non-text column "
                     f"{tn}.{col} ({cols[col]['COLUMN_TYPE']}); preserve it or choose a compatible rule"
@@ -162,7 +165,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
             if cols[col]["COLUMN_KEY"] == "UNI":
                 if cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                     raise ValueError(f"Unique non-text column {tn}.{col} requires an application-specific transformation")
-                if rule.get("type") not in {"email", "phone", "name", "address", "unique"}:
+                if rule.get("type") not in {"email", "phone", "name", "address", "ip_address", "unique"}:
                     raise ValueError(f"Unique text column {tn}.{col} requires a text transformation such as name or unique")
-            if rule.get("type") not in {"email", "phone", "name", "address", "date_shift", "constant", "unique"}:
+            if rule.get("type") not in {"email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"}:
                 raise ValueError(f"Unsupported transform for {tn}.{col}")
