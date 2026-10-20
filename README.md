@@ -127,6 +127,8 @@ The window lets you load connection settings and rules, inspect the source, sele
 
 The **Auto-confirm copy/table actions** option skips the regular copy, selected-table recreation, missing-mapping-store, and stale-rule confirmation prompts. It is saved in the app's local state. Recreating the entire destination database still requires typing its name, resuming a saved copy still prompts at startup, and discarding an interrupted-copy checkpoint still requires confirmation.
 
+The GUI writes timestamped diagnostics to `gui.log` beside its state file in the app configuration directory; the full log path appears in the output panel. The log rotates after 2 MB and keeps three backups. It records operation stages and errors, but excludes the output panel's lookup results and masks common row-value details.
+
 For GUI lookups, choose or create a mapping store at the top of the window and copy data with that path selected. If no mapping store is selected, the GUI warns that the copy will not save mappings and asks whether to continue unless auto-confirm is enabled. Open the **Lookup** tab and use **Load fields** to populate the table and column dropdowns from the store. Choose a table and column, enter the exact value, then choose original-to-anonymized or anonymized-to-original. The search uses the mapping store and may return multiple matches. The dropdowns refresh after a copy when a mapping store is selected.
 
 Run these commands from the project directory:

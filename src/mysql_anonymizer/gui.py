@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -11,6 +13,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
+from logging.handlers import RotatingFileHandler
 
 from .cli import check_config
 from .gui_settings import SettingsMixin
@@ -90,6 +93,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.config_path = tk.StringVar(value="config.json")
         self.rules_path = tk.StringVar(value="rules.json")
         self.mapping_path = tk.StringVar()
+        self._init_diagnostics()
         self._load_last_paths()
         self.auto_confirm_operations = tk.BooleanVar(value=self.saved_auto_confirm_operations)
         self.allow_locks = tk.BooleanVar(value=False)
@@ -98,6 +102,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.connection_fields: dict[str, dict[str, tk.StringVar]] = {}
         self.password_fields: dict[str, tk.StringVar] = {}
         self._build_ui()
+        self._log(f"Diagnostic log: {self.diagnostic_log_path}")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_messages)
         self.after(250, self._offer_resume_copy)
@@ -111,6 +116,45 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         else:
             config_root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         return config_root / "mysql-anonymized-copy" / "gui_state.json"
+
+    def _init_diagnostics(self) -> None:
+        self.diagnostic_log_path = self._state_file().with_name("gui.log")
+        self.diagnostic_logger = logging.getLogger(f"mysql_anonymized_copy.gui.{id(self)}")
+        self.diagnostic_logger.setLevel(logging.INFO)
+        self.diagnostic_logger.propagate = False
+        try:
+            self.diagnostic_log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try:
+                self.diagnostic_log_path.parent.chmod(0o700)
+            except OSError:
+                pass
+            handler = RotatingFileHandler(
+                self.diagnostic_log_path, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+            )
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+            self.diagnostic_logger.addHandler(handler)
+            try:
+                self.diagnostic_log_path.chmod(0o600)
+            except OSError:
+                pass
+            self._diagnostic("application_started")
+        except OSError:
+            self.diagnostic_logger.addHandler(logging.NullHandler())
+
+    @staticmethod
+    def _diagnostic_error(exc: Exception) -> str:
+        message = str(exc)
+        message = re.sub(r"(?i)(password|passwd|pwd)\s*[:=]\s*([^\s,;]+)", r"\1=<redacted>", message)
+        message = re.sub(r"(?i)primary key\s+\{[^}]*\}", "primary key <redacted>", message)
+        message = re.sub(r"(?i)\bvalue\s+(?:'[^']*'|\"[^\"]*\")", "value <redacted>", message)
+        return f"{type(exc).__name__}: {message[:1200]}"
+
+    def _diagnostic(self, event: str, detail: str = "") -> None:
+        self.diagnostic_logger.info("%s%s", event, f": {detail}" if detail else "")
+        try:
+            self.diagnostic_log_path.chmod(0o600)
+        except OSError:
+            pass
 
     def _load_last_paths(self) -> None:
         try:
@@ -704,7 +748,9 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
             action = resume_state.get("recreate_action", "copy")
             if action == "recreate_database" and not resume_state.get("is_resume"):
+                self._diagnostic("destination_database_recreation_started")
                 recreate_destination_database(config["destination"], config["source"])
+                self._diagnostic("destination_database_recreated")
             destination = connect_with_guidance("destination", config["destination"])
             if action == "replace_tables" and not resume_state.get("is_resume"):
                 check = destination.cursor()
@@ -719,8 +765,10 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     include_dependencies,
                     existing_tables - set(selected),
                 )
+                self._diagnostic("destination_table_drop_started", f"table_count={len(selected)}")
                 self.messages.put(("operation_status", f"Dropping {len(selected)} destination table(s)…"))
                 drop_destination_tables(destination, selected)
+                self._diagnostic("destination_table_drop_completed", f"table_count={len(selected)}")
                 self.messages.put(("log", "Destination tables dropped; recreating from source…"))
             self.messages.put(("progress", {"event": "copy_started"}))
 
@@ -736,6 +784,14 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     completed[progress["table"]] = progress["copied_rows"]
                     resume_state["completed_counts"] = completed
                     self._save_copy_checkpoint(resume_state)
+                if progress.get("event") in {"start", "table", "table_done"}:
+                    self._diagnostic(
+                        "copy_progress",
+                        f"event={progress.get('event')} table={progress.get('table', '')!r} "
+                        f"completed_tables={progress.get('completed_tables', '')} "
+                        f"total_tables={progress.get('total_tables', '')} "
+                        f"copied_rows={progress.get('copied_rows', '')}",
+                    )
                 self.messages.put(("progress", progress))
 
             try:
@@ -779,12 +835,15 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.busy = True
         self._set_busy(True)
         self.status.set(status)
+        self._diagnostic("operation_started", status)
 
         def run() -> None:
             try:
                 operation(*args)
+                self._diagnostic("operation_worker_completed", status)
                 self.messages.put(("done", None))
             except Exception as exc:
+                self._diagnostic("operation_failed", self._diagnostic_error(exc))
                 self.messages.put(("error", str(exc)))
 
         threading.Thread(target=run, daemon=True).start()
@@ -797,6 +856,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 break
             if kind == "tables":
                 self.tables, self.copied_table_names, config = value
+                self._diagnostic("inspection_completed", f"source_tables={len(self.tables)}")
                 destination_identity = self._destination_identity(config)
                 identity_key = self._destination_identity_key(destination_identity)
                 self.recreated_destination_identity = destination_identity
@@ -903,6 +963,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 self._lookup_table_selected()
                 self._log(f"Loaded {len(tables)} mapped table(s) and their columns.")
             elif kind == "error":
+                self._diagnostic("operation_error_displayed", self._diagnostic_error(RuntimeError(value)))
                 self.copy_after_schema_check = False
                 if self.copy_schema_verified is False and self.status.get().startswith("Checking whether"):
                     self._reset_inspection_progress()
