@@ -2,16 +2,118 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 from typing import Any
+from urllib.parse import quote
 
 from .cli import check_config
 from .core import init_rules, list_mapping_fields, load_json, open_mapping_store, save_json_atomic
 
 
 class SettingsMixin:
+    def _profiles_directory(self) -> Path:
+        return self._state_file().parent / "profiles"
+
+    def _profile_path(self, name: str) -> Path:
+        return self._profiles_directory() / f"{quote(name, safe='')}.json"
+
+    def _refresh_profiles(self) -> None:
+        directory = self._profiles_directory()
+        names = []
+        try:
+            for path in directory.glob("*.json"):
+                try:
+                    profile = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(profile, dict) and isinstance(profile.get("name"), str):
+                    names.append(profile["name"])
+        except OSError:
+            pass
+        names.sort(key=str.casefold)
+        self.profile_box.configure(values=names)
+        if self.profile_selection.get() not in names:
+            self.profile_selection.set(names[0] if names else "")
+
+    def _save_profile_as(self) -> None:
+        name = simpledialog.askstring("Save app profile", "Profile name:", parent=self)
+        if name is None:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showerror("Profile name required", "Enter a name for this profile.")
+            return
+        path = self._profile_path(name)
+        if path.exists() and not messagebox.askyesno(
+            "Replace profile", f"A profile named {name!r} already exists. Replace it?", parent=self
+        ):
+            return
+        try:
+            config = self._config()
+            raw_rules = self.rules_editor.get("1.0", "end-1c").strip()
+            rules = json.loads(raw_rules) if raw_rules else load_json(self.rules_path.get())
+            if not isinstance(rules, dict):
+                raise ValueError("Rules must be a JSON object")
+            directory = self._profiles_directory()
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try:
+                directory.chmod(0o700)
+            except OSError:
+                pass
+            profile = {
+                "version": 1,
+                "name": name,
+                "config": config,
+                "rules": rules,
+                "config_path": self.config_path.get(),
+                "rules_path": self.rules_path.get(),
+                "mapping_path": self.mapping_path.get(),
+                "auto_confirm_operations": self.auto_confirm_operations.get(),
+                "show_selected_tables_on_top": self.selected_tables_on_top.get(),
+            }
+            save_json_atomic(str(path), profile)
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass
+            self.profile_selection.set(name)
+            self._refresh_profiles()
+            self._log(f"Saved app profile {name!r}.")
+        except Exception as exc:
+            messagebox.showerror("Could not save profile", str(exc))
+
+    def _load_profile(self) -> None:
+        name = self.profile_selection.get().strip()
+        if not name:
+            messagebox.showinfo("Select profile", "Choose a profile to load.")
+            return
+        try:
+            profile = load_json(str(self._profile_path(name)))
+            if profile.get("version") != 1 or profile.get("name") != name:
+                raise ValueError("Unsupported or invalid profile file")
+            config = profile.get("config")
+            rules = profile.get("rules")
+            if not isinstance(config, dict) or not isinstance(rules, dict):
+                raise ValueError("Profile must contain config and rules objects")
+            check_config(config)
+            self.config_path.set(str(profile.get("config_path") or "config.json"))
+            self.rules_path.set(str(profile.get("rules_path") or "rules.json"))
+            self.mapping_path.set(str(profile.get("mapping_path") or ""))
+            self._apply_config(config, profile=True)
+            self._set_rules_text(json.dumps(rules, indent=2, ensure_ascii=False))
+            self.auto_confirm_operations.set(bool(profile.get("auto_confirm_operations", False)))
+            self.selected_tables_on_top.set(bool(profile.get("show_selected_tables_on_top", False)))
+            if self.tables:
+                self._restore_table_selection()
+                self._render_source_tables()
+            self._save_last_paths()
+            self._log(f"Loaded app profile {name!r}.")
+        except Exception as exc:
+            messagebox.showerror("Could not load profile", str(exc))
+
     def _choose_config(self) -> None:
         path = filedialog.askopenfilename(title="Open config", filetypes=(("JSON files", "*.json"), ("All files", "*")))
         if path:
@@ -80,30 +182,37 @@ class SettingsMixin:
     def _load_config(self) -> None:
         try:
             config = load_json(self.config_path.get())
-            for role in ("source", "destination"):
-                settings = config.get(role, {})
-                for key, var in self.connection_fields[role].items():
-                    var.set(str(settings.get(key, "127.0.0.1" if key == "host" else "3306" if key == "port" else "")))
-                self.password_fields[role].set(str(settings.get("password", "")))
-            self.allow_locks.set(bool(config.get("allow_source_table_locks", False)))
-            tables_view = config.get("tables_view", {})
-            if not isinstance(tables_view, dict):
-                tables_view = {}
-            self.include_dependencies.set(bool(tables_view.get("include_dependencies", True)))
-            selection = tables_view.get("selected_tables", [])
-            self.saved_table_selection = [name for name in selection if isinstance(name, str)] if isinstance(selection, list) else []
-            if self.tables:
-                self._restore_table_selection()
+            self._apply_config(config)
             self._save_last_paths()
             self._log(f"Loaded config from {self.config_path.get()}.")
         except Exception as exc:
             messagebox.showerror("Could not load config", str(exc))
 
+    def _apply_config(self, config: dict[str, Any], profile: bool = False) -> None:
+        self.profile_config = copy.deepcopy(config) if profile else None
+        for role in ("source", "destination"):
+            settings = config.get(role, {})
+            for key, var in self.connection_fields[role].items():
+                var.set(str(settings.get(key, "127.0.0.1" if key == "host" else "3306" if key == "port" else "")))
+            self.password_fields[role].set(str(settings.get("password", "")))
+        self.allow_locks.set(bool(config.get("allow_source_table_locks", False)))
+        tables_view = config.get("tables_view", {})
+        if not isinstance(tables_view, dict):
+            tables_view = {}
+        self.include_dependencies.set(bool(tables_view.get("include_dependencies", True)))
+        selection = tables_view.get("selected_tables", [])
+        self.saved_table_selection = [name for name in selection if isinstance(name, str)] if isinstance(selection, list) else []
+        if self.tables:
+            self._restore_table_selection()
+
     def _config(self) -> dict[str, Any]:
-        try:
-            config = load_json(self.config_path.get()) if Path(self.config_path.get()).exists() else {}
-        except Exception:
-            config = {}
+        if self.profile_config is not None:
+            config = copy.deepcopy(self.profile_config)
+        else:
+            try:
+                config = load_json(self.config_path.get()) if Path(self.config_path.get()).exists() else {}
+            except Exception:
+                config = {}
         for role in ("source", "destination"):
             old = dict(config.get(role, {}))
             old.pop("password", None)
@@ -146,6 +255,7 @@ class SettingsMixin:
                 json.dump(config, f, indent=2)
                 f.write("\n")
             self._log(f"Saved connection settings and entered passwords to {self.config_path.get()}.")
+            self.profile_config = copy.deepcopy(config)
             self._save_last_paths()
         except Exception as exc:
             messagebox.showerror("Could not save config", str(exc))

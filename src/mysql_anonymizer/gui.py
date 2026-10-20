@@ -97,6 +97,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.config_path = tk.StringVar(value="config.json")
         self.rules_path = tk.StringVar(value="rules.json")
         self.mapping_path = tk.StringVar()
+        self.profile_selection = tk.StringVar()
+        self.profile_config: dict[str, Any] | None = None
         self._init_diagnostics()
         self._load_last_paths()
         self.auto_confirm_operations = tk.BooleanVar(value=self.saved_auto_confirm_operations)
@@ -106,6 +108,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.connection_fields: dict[str, dict[str, tk.StringVar]] = {}
         self.password_fields: dict[str, tk.StringVar] = {}
         self._build_ui()
+        self._refresh_profiles()
         self._log(f"Diagnostic log: {self.diagnostic_log_path}")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_messages)

@@ -39,6 +39,7 @@ class ViewMixin:
         self._config_path_row(paths, 0)
         self._rules_path_row(paths, 1)
         self._path_row(paths, 2, "Mapping store (optional)", self.mapping_path, self._choose_mapping)
+        self._profile_row(paths, 3)
         actions = ttk.Frame(self, padding=(12, 4, 12, 4))
         actions.pack(fill="x")
         self.save_config_button = ttk.Button(actions, text="Save config", command=self._save_config, width=14)
@@ -111,6 +112,20 @@ class ViewMixin:
         ttk.Label(parent, text=label, width=22).grid(row=row, column=0, sticky="w", pady=2)
         ttk.Entry(parent, textvariable=var).grid(row=row, column=1, sticky="ew", padx=8, pady=2)
         ttk.Button(parent, text="Browse…", command=browse).grid(row=row, column=2, pady=2)
+        parent.columnconfigure(1, weight=1)
+
+    def _profile_row(self, parent: ttk.Frame, row: int) -> None:
+        ttk.Label(parent, text="App profile", width=22).grid(row=row, column=0, sticky="w", pady=2)
+        self.profile_box = ttk.Combobox(
+            parent, textvariable=self.profile_selection, state="readonly", width=40
+        )
+        self.profile_box.grid(row=row, column=1, sticky="ew", padx=8, pady=2)
+        ttk.Button(parent, text="Load profile", command=self._load_profile).grid(
+            row=row, column=2, padx=(0, 4), pady=2
+        )
+        ttk.Button(parent, text="Save profile…", command=self._save_profile_as).grid(
+            row=row, column=3, pady=2
+        )
         parent.columnconfigure(1, weight=1)
 
     def _build_connections(self) -> None:
