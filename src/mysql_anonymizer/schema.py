@@ -32,22 +32,30 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
             })
 
         cur.execute(
-            "SELECT DISTINCT TABLE_NAME, REFERENCED_TABLE_NAME "
+            "SELECT DISTINCT TABLE_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME "
             "FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=%s "
             "AND REFERENCED_TABLE_NAME IS NOT NULL",
             (schema,),
         )
         references_by_table: dict[str, list[str]] = {}
+        external_references_by_table: dict[str, list[str]] = {}
         for reference in cur.fetchall():
-            references_by_table.setdefault(reference["TABLE_NAME"], []).append(
-                reference["REFERENCED_TABLE_NAME"]
-            )
+            if reference["REFERENCED_TABLE_SCHEMA"] == schema:
+                references_by_table.setdefault(reference["TABLE_NAME"], []).append(
+                    reference["REFERENCED_TABLE_NAME"]
+                )
+            else:
+                external_references_by_table.setdefault(reference["TABLE_NAME"], []).append(
+                    f"{reference['CONSTRAINT_NAME']} -> "
+                    f"{reference['REFERENCED_TABLE_SCHEMA']}.{reference['REFERENCED_TABLE_NAME']}"
+                )
 
         return [{
             "name": table["TABLE_NAME"],
             "engine": table["ENGINE"],
             "columns": columns_by_table.get(table["TABLE_NAME"], []),
             "references": references_by_table.get(table["TABLE_NAME"], []),
+            "external_references": external_references_by_table.get(table["TABLE_NAME"], []),
         } for table in tables]
     finally:
         cur.close()

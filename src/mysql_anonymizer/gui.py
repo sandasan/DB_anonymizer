@@ -477,6 +477,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             "name": table["name"],
             "engine": table.get("engine"),
             "references": sorted(table.get("references", [])),
+            "external_references": sorted(table.get("external_references", [])),
             "columns": [{key: column.get(key) for key in (
                 "COLUMN_NAME", "DATA_TYPE", "COLUMN_TYPE", "IS_NULLABLE", "COLUMN_KEY", "EXTRA"
             )} for column in table.get("columns", [])],

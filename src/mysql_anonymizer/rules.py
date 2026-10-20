@@ -6,6 +6,15 @@ from typing import Any
 
 from .transformations import TEXT_DATA_TYPES
 
+_TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
+_TRANSFORM_MAX_LENGTH = {
+    "email": len("user") + 14 + len("@example.invalid"),
+    "phone": len("+1555") + 7,
+    "name": len("Person") + 8,
+    "address": len("9999 Example Street"),
+    "unique": len("anon") + 64,
+}
+
 
 def migrate_identifier_rules(rules: dict[str, Any], tables: list[dict[str, Any]]) -> list[str]:
     """Move primary and conventional ID columns out of anonymization rules."""
@@ -112,6 +121,25 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                     f"Text transformation {rule.get('type')!r} configured for non-text column "
                     f"{tn}.{col} ({cols[col]['COLUMN_TYPE']}); preserve it or choose a compatible rule"
                 )
+            kind = rule.get("type")
+            data_type = cols[col]["DATA_TYPE"].lower()
+            if kind == "date_shift" and data_type not in _TEMPORAL_DATA_TYPES:
+                raise ValueError(
+                    f"date_shift configured for non-date column {tn}.{col} "
+                    f"({cols[col]['COLUMN_TYPE']}); preserve it or choose a compatible rule"
+                )
+            column_type = cols[col]["COLUMN_TYPE"]
+            length_match = re.fullmatch(r"(?:var)?char\((\d+)\)", column_type, re.I)
+            if length_match and cols[col]["COLUMN_KEY"] != "UNI":
+                max_length = int(length_match.group(1))
+                required_length = _TRANSFORM_MAX_LENGTH.get(kind)
+                if kind == "constant" and isinstance(rule.get("value"), str):
+                    required_length = len(rule["value"])
+                if required_length is not None and required_length > max_length:
+                    raise ValueError(
+                        f"Transformation {kind!r} may produce {required_length} characters, "
+                        f"but {tn}.{col} is limited to {max_length}; use a wider column or a shorter rule"
+                    )
             if cols[col]["COLUMN_KEY"] == "UNI":
                 if cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                     raise ValueError(f"Unique non-text column {tn}.{col} requires an application-specific transformation")

@@ -225,6 +225,16 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     # checks (or resume handling) can report and process them correctly.
     selected_names.difference_update(referenced_existing - explicitly_selected)
     tables = [table for table in all_tables if table["name"] in selected_names]
+    external_references = [
+        f"{table['name']}.{reference}"
+        for table in tables
+        for reference in table.get("external_references", [])
+    ]
+    if external_references:
+        raise ValueError(
+            "Selected source tables have foreign keys to other schemas, which cannot be "
+            "safely redirected into the destination: " + "; ".join(external_references)
+        )
     table_positions = {table["name"]: index for index, table in enumerate(tables, start=1)}
     completed_counts = dict(completed_counts or {})
     completed_names = set(completed_counts)

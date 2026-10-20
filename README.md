@@ -188,7 +188,7 @@ By default, `copy` includes every source table. To copy only selected tables, re
 mysql-anonymizer copy --config config.json --rules rules.json --table customers --table orders
 ```
 
-Every selected table's referenced tables must also be selected so its foreign keys can be created in the destination. If a dependency is missing, the command reports it and stops before creating destination tables. Add `--include-dependencies` to include all referenced tables recursively:
+Every selected table's referenced tables in the source schema must also be selected so its foreign keys can be created in the destination. If a dependency is missing, or a selected table has a foreign key to another schema, the command reports it and stops before creating destination tables. Add `--include-dependencies` to include all same-schema references recursively:
 
 ```bash
 mysql-anonymizer copy --config config.json --rules rules.json --table orders --include-dependencies
