@@ -833,7 +833,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             try:
                 counts = copy_database(
                     source, destination, config["source"]["database"], rules,
-                    config.get("batch_size", 500), allow_locks,
+                    config.get("batch_size", 2000), allow_locks,
                     mapping_path, selected, include_dependencies,
                     report_progress,
                     resume_state.get("completed_counts", {}), pause_event,

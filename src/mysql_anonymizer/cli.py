@@ -77,7 +77,7 @@ def main() -> None:
                 destination = connect(config["destination"])
                 try:
                     counts = copy_database(source, destination, config["source"]["database"], rules,
-                                           config.get("batch_size", 500), config.get("allow_source_table_locks", False),
+                                           config.get("batch_size", 2000), config.get("allow_source_table_locks", False),
                                            args.mapping_store, args.selected_tables, args.include_dependencies)
                     copied = set(counts)
                     print("Copy complete. Copied tables:")

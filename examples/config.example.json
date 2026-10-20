@@ -7,5 +7,5 @@
     "include_dependencies": false,
     "selected_tables": []
   },
-  "batch_size": 500
+  "batch_size": 2000
 }

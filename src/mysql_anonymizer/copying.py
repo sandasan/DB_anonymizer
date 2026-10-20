@@ -143,7 +143,7 @@ def recreate_destination_database(settings: dict[str, Any], source_settings: dic
         connection.close()
 
 
-def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
+def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 2000,
                   allow_source_table_locks: bool = False, mapping_store: str | None = None,
                   selected_tables: list[str] | None = None,
                   include_dependencies: bool = False,
