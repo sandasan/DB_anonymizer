@@ -232,7 +232,7 @@ class ViewMixin:
         toolbar = ttk.Frame(self.rules_tab)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Load rules", command=self._load_rules).pack(side="left")
-        ttk.Button(toolbar, text="Generate starter rules", command=self._generate_rules).pack(side="left", padx=8)
+        ttk.Button(toolbar, text="Generate rules from schema", command=self._generate_rules).pack(side="left", padx=8)
         ttk.Button(toolbar, text="Save rules", command=self._save_rules).pack(side="left")
         filters = ttk.Frame(self.rules_tab)
         filters.pack(fill="x", pady=(0, 6))

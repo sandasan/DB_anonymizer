@@ -70,7 +70,7 @@ def main() -> None:
                 with open(args.output, "w", encoding="utf-8") as f:
                     json.dump(init_rules(tables), f, indent=2)
                     f.write("\n")
-                print(f"Wrote starter rules to {args.output}; review every table and column.")
+                print(f"Wrote schema-based rules to {args.output}; review every table and column.")
             else:
                 rules = load_json(args.rules)
                 moved = migrate_identifier_rules(rules, tables)

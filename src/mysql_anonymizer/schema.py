@@ -20,7 +20,7 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
             return []
 
         cur.execute(
-            "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA "
+            "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA, COLUMN_COMMENT "
             "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s "
             "ORDER BY TABLE_NAME, ORDINAL_POSITION",
             (schema,),
@@ -32,14 +32,16 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
             })
 
         cur.execute(
-            "SELECT DISTINCT TABLE_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME "
+            "SELECT DISTINCT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME "
             "FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=%s "
             "AND REFERENCED_TABLE_NAME IS NOT NULL",
             (schema,),
         )
         references_by_table: dict[str, list[str]] = {}
+        foreign_key_columns: dict[str, set[str]] = {}
         external_references_by_table: dict[str, list[str]] = {}
         for reference in cur.fetchall():
+            foreign_key_columns.setdefault(reference["TABLE_NAME"], set()).add(reference["COLUMN_NAME"])
             if reference["REFERENCED_TABLE_SCHEMA"] == schema:
                 references_by_table.setdefault(reference["TABLE_NAME"], []).append(
                     reference["REFERENCED_TABLE_NAME"]
@@ -54,6 +56,7 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
             "name": table["TABLE_NAME"],
             "engine": table["ENGINE"],
             "columns": columns_by_table.get(table["TABLE_NAME"], []),
+            "foreign_key_columns": sorted(foreign_key_columns.get(table["TABLE_NAME"], set())),
             "references": references_by_table.get(table["TABLE_NAME"], []),
             "external_references": external_references_by_table.get(table["TABLE_NAME"], []),
         } for table in tables]

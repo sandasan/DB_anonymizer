@@ -22,6 +22,9 @@ def migrate_identifier_rules(rules: dict[str, Any], tables: list[dict[str, Any]]
         table["name"]: {c["COLUMN_NAME"] for c in table["columns"] if c["COLUMN_KEY"] == "PRI"}
         for table in tables
     }
+    foreign_keys = {
+        table["name"]: set(table.get("foreign_key_columns", [])) for table in tables
+    }
     moved = []
     for table, config in rules.get("tables", {}).items():
         anonymize = config.get("anonymize", {})
@@ -31,7 +34,7 @@ def migrate_identifier_rules(rules: dict[str, Any], tables: list[dict[str, Any]]
         identifiers = primary_keys.get(table, set())
         for column in list(anonymize):
             low = column.lower()
-            if column in identifiers or low == "id" or low.endswith("_id"):
+            if column in identifiers or column in foreign_keys.get(table, set()) or low == "id" or low.endswith("_id"):
                 del anonymize[column]
                 if column not in preserve:
                     preserve.append(column)
@@ -41,26 +44,42 @@ def migrate_identifier_rules(rules: dict[str, Any], tables: list[dict[str, Any]]
 
 
 def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
+    """Generate conservative rules from inspected schema metadata."""
     rules: dict[str, Any] = {"confirm_copy_password_hashes": False, "tables": {}}
     for table in tables:
         preserve, anonymize = [], {}
+        foreign_keys = set(table.get("foreign_key_columns", []))
         for c in table["columns"]:
             name, low = c["COLUMN_NAME"], c["COLUMN_NAME"].lower()
-            is_text = c["DATA_TYPE"].lower() in TEXT_DATA_TYPES
-            is_identifier = c["COLUMN_KEY"] == "PRI" or low.endswith("_id") or low == "id"
+            data_type = c["DATA_TYPE"].lower()
+            is_text = data_type in TEXT_DATA_TYPES
+            is_identifier = c["COLUMN_KEY"] == "PRI" or name in foreign_keys or low.endswith("_id") or low == "id"
+            table_name = table["name"].lower()
+            comment = str(c.get("COLUMN_COMMENT") or "").lower()
+            tokens = set(re.findall(r"[a-z0-9]+", low))
+            hints = f"{low} {comment}"
+            non_personal = bool(tokens & {"type", "status", "kind", "category", "code", "format", "source"})
+            auth_table = bool(re.search(r"(^|_)(user|users|account|accounts|auth|login)(_|$)", table_name))
             if is_identifier:
                 preserve.append(name)
-            if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|email", low):
+            if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|token|secret|salt", low):
                 preserve.append(name)
-            elif is_identifier:
-                # Keep keys and foreign-key columns unchanged to retain relationships.
+            elif is_identifier or non_personal:
                 continue
-            elif is_text and re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", low):
+            elif is_text and re.search(r"email|e_mail", hints):
+                # Email may be a login identifier in account tables; retain it there.
+                if auth_table or re.search(r"primary|login|auth", comment):
+                    preserve.append(name)
+                else:
+                    anonymize[name] = {"type": "email"}
+            elif is_text and re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", hints):
                 anonymize[name] = {"type": "phone"}
-            elif is_text and re.search(r"first.?name|last.?name|full.?name|^name$", low):
+            elif is_text and re.search(r"first.?name|last.?name|full.?name|given.?name|family.?name|surname|^name$", hints):
                 anonymize[name] = {"type": "name"}
-            elif is_text and re.search(r"address|street|city|postal|zip", low):
+            elif is_text and re.search(r"address|street|city|postal|zip", hints):
                 anonymize[name] = {"type": "address"}
+            elif data_type in _TEMPORAL_DATA_TYPES and re.search(r"birth|dob|date_of_birth", hints):
+                anonymize[name] = {"type": "date_shift"}
         rules["tables"][table["name"]] = {"preserve": sorted(set(preserve)), "anonymize": anonymize}
     return rules
 
@@ -114,7 +133,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"Identifier column {tn}.{col} must be preserved to keep database relationships intact; remove it from anonymize")
             if col in preserved:
                 raise ValueError(f"{tn}.{col} is in both preserve and anonymize; remove it from anonymize")
-            if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|email", col, re.I):
+            if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|token|secret|salt", col, re.I):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
             if rule.get("type") in {"email", "phone", "name", "address", "unique"} and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                 raise ValueError(

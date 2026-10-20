@@ -298,7 +298,7 @@ class SettingsMixin:
             return
         self._set_rules_text(json.dumps(init_rules(self.tables), indent=2, ensure_ascii=False))
         self.tabs_widget.select(self.rules_tab)
-        self._log("Generated starter rules. Review every table and column before copying.")
+        self._log("Generated rules from inspected schema metadata. Review every table and column before copying.")
 
     def _save_rules(self) -> None:
         try:
