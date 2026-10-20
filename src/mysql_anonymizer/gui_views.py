@@ -487,7 +487,7 @@ class ViewMixin:
         self.browse_tree.configure(columns=())
 
     def _render_source_tables(self) -> None:
-        self._sync_table_selection()
+        self._sync_table_selection(propose_marks=False)
         selected_names = self._table_selected_names
         self.table_list.delete(*self.table_list.get_children())
         query = self.table_filter.get().strip().casefold()
@@ -548,7 +548,7 @@ class ViewMixin:
             return "↻"
         return "✓" if name in self.copied_table_names else ""
 
-    def _sync_table_selection(self, _event=None) -> None:
+    def _sync_table_selection(self, _event=None, propose_marks: bool = True) -> None:
         if not hasattr(self, "table_list"):
             return
         visible_names = {self.table_list.item(item, "values")[1]
@@ -580,6 +580,8 @@ class ViewMixin:
                 name = self.table_list.item(item_id, "values")[1]
                 if name in self._table_selected_names:
                     self.table_list.selection_add(item_id)
+        if propose_marks:
+            self._propose_existing_table_marks()
 
     def _selected_table_names(self) -> list[str]:
         self._sync_table_selection()

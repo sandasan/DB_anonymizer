@@ -72,6 +72,9 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
         self.copied_table_names: set[str] = set()
+        self.destination_table_names: set[str] = set()
+        self.copied_destination_identity: tuple[str, str, str] | None = None
+        self._declined_existing_table_marks: set[str] = set()
         self.recreated_table_names: set[str] = set()
         self.recreated_destination_identity: tuple[str, str, str] | None = None
         self.recreated_tables_by_destination: dict[str, set[str]] = {}
@@ -380,6 +383,28 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             self._reset_inspection_progress()
             messagebox.showerror("Invalid connection settings", str(exc))
 
+    def _propose_existing_table_marks(self) -> None:
+        candidates = sorted(
+            self._table_selected_names
+            & self.destination_table_names
+            - self.copied_table_names
+            - self._declined_existing_table_marks
+        )
+        if not candidates:
+            return
+        names = "\n".join(f"  {name}" for name in candidates)
+        if messagebox.askyesno(
+            "Tables already exist",
+            "These selected source tables already exist in the destination. Mark them as copied in the table list?\n\n"
+            f"{names}\n\nAccepted tables will be skipped by the normal copy action.",
+        ):
+            self.copied_table_names.update(candidates)
+            self.copied_destination_identity = self.recreated_destination_identity
+            self._render_source_tables()
+            self._save_last_paths()
+        else:
+            self._declined_existing_table_marks.update(candidates)
+
     def _test_connections(self) -> None:
         try:
             config = self._config()
@@ -653,8 +678,14 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             selected = self._selected_table_names()
             if action == "recreate_database":
                 selected = [table["name"] for table in self.tables]
+            elif action == "copy":
+                selected = [name for name in selected if name not in self.copied_table_names]
             if not selected:
-                messagebox.showinfo("Select tables", "Select at least one table to copy.")
+                messagebox.showinfo(
+                    "Select tables",
+                    "All selected tables are already marked as present in the destination. "
+                    "Select another table or recreate the existing tables.",
+                )
                 return
             config = self._config()
             relevant_tables = set(selected)
@@ -896,10 +927,19 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             except queue.Empty:
                 break
             if kind == "tables":
-                self.tables, self.copied_table_names, config = value
+                self.tables, destination_tables, config = value
                 self._diagnostic("inspection_completed", f"source_tables={len(self.tables)}")
                 destination_identity = self._destination_identity(config)
                 identity_key = self._destination_identity_key(destination_identity)
+                previously_marked = (
+                    self.copied_table_names
+                    if self.copied_destination_identity == destination_identity
+                    else set()
+                )
+                self.destination_table_names = set(destination_tables)
+                self.copied_table_names = previously_marked & self.destination_table_names
+                self.copied_destination_identity = destination_identity
+                self._declined_existing_table_marks.clear()
                 self.recreated_destination_identity = destination_identity
                 self.recreated_table_names = (
                     self.recreated_tables_by_destination.get(identity_key, set())
@@ -917,6 +957,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 self._save_last_paths()
                 self._render_source_tables()
                 self._restore_table_selection()
+                self._propose_existing_table_marks()
                 self._refresh_rules_preview()
                 self._log(f"Found {len(self.tables)} source tables.")
                 self._reset_inspection_progress()
@@ -941,6 +982,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             elif kind == "copied_tables":
                 copied_names, action, destination_identity = value
                 self.copied_table_names.update(copied_names)
+                self.destination_table_names.update(copied_names)
+                self.copied_destination_identity = destination_identity
                 if action in {"replace_tables", "recreate_database"}:
                     identity_key = self._destination_identity_key(destination_identity)
                     if self.recreated_destination_identity != destination_identity:
@@ -956,6 +999,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             elif kind == "table_copied":
                 table_name, action, destination_identity = value
                 self.copied_table_names.add(table_name)
+                self.destination_table_names.add(table_name)
+                self.copied_destination_identity = destination_identity
                 if action in {"replace_tables", "recreate_database"}:
                     identity_key = self._destination_identity_key(destination_identity)
                     if self.recreated_destination_identity != destination_identity:
@@ -970,6 +1015,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             elif kind == "destination_data_cleared":
                 identity, names = value
                 self.copied_table_names.clear()
+                self.destination_table_names.difference_update(names)
                 identity_key = self._destination_identity_key(identity)
                 self.recreated_tables_by_destination.pop(identity_key, None)
                 if self.recreated_destination_identity == identity:
