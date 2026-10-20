@@ -962,7 +962,19 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     item["copy_eta"] = self._format_duration(rows / rate)
                 else:
                     item["copy_eta"] = "calculating"
-            self._render_source_tables()
+            # Progress arrives for every batch. Rebuilding the full table view here
+            # makes large inspections/copies appear to freeze; update visible ETA
+            # cells in place and leave ordering to the next explicit sort action.
+            for item_id in self.table_list.get_children():
+                try:
+                    table_index = int(item_id.removeprefix("table_"))
+                    table = self.tables[table_index]
+                except (ValueError, IndexError):
+                    continue
+                values = list(self.table_list.item(item_id, "values"))
+                if len(values) > 4:
+                    values[4] = table.get("copy_eta", "—")
+                    self.table_list.item(item_id, values=values)
         if event == "table":
             self.overall_progress.configure(value=max(0, table_index - 1))
             self.table_progress.configure(maximum=max(table_rows, 1), value=0)
