@@ -158,6 +158,11 @@ class ViewMixin:
             command=self._sync_table_selection,
         ).pack(side="left", padx=12)
         ttk.Checkbutton(toolbar, text="Allow source table locks for non-InnoDB", variable=self.allow_locks).pack(side="left", padx=12)
+        self.selected_tables_on_top = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            toolbar, text="Show selected tables at top", variable=self.selected_tables_on_top,
+            command=self._render_source_tables,
+        ).pack(side="left", padx=12)
         filter_bar = ttk.Frame(self.tables_tab)
         filter_bar.pack(fill="x", pady=(0, 6))
         ttk.Label(filter_bar, text="Filter tables").pack(side="left")
@@ -509,6 +514,8 @@ class ViewMixin:
         self.table_filter_status.set(f"{len(indexed_tables):,} of {len(self.tables):,} tables")
         indexed_tables.sort(key=lambda pair: self._table_sort_value(pair[1], self.table_sort_column),
                             reverse=self.table_sort_reverse)
+        if self.selected_tables_on_top.get():
+            indexed_tables.sort(key=lambda pair: pair[1]["name"] not in selected_names)
         for index, table in indexed_tables:
             name = table["name"]
             mark = self._table_destination_mark(name)
@@ -550,6 +557,16 @@ class ViewMixin:
                             for item in self.table_list.selection()}
         self._table_selected_names.difference_update(visible_names)
         self._table_selected_names.update(selected_visible)
+        if self.selected_tables_on_top.get():
+            # Keep the current sort order and move selected rows as a stable group
+            # whenever the user changes the selection.
+            row_ids = list(self.table_list.get_children())
+            selected_ids = [item_id for item_id in row_ids
+                            if self.table_list.item(item_id, "values")[1] in self._table_selected_names]
+            selected_id_set = set(selected_ids)
+            unselected_ids = [item_id for item_id in row_ids if item_id not in selected_id_set]
+            for position, item_id in enumerate(selected_ids + unselected_ids):
+                self.table_list.move(item_id, "", position)
         if self.include_dependencies.get() and self._table_selected_names:
             by_name = {table["name"]: table for table in self.tables}
             pending = list(self._table_selected_names)
