@@ -41,6 +41,52 @@ def _close_cursor_safely(connection, cursor) -> None:
             pass
 
 
+def _estimated_sql_row_size(row: tuple[Any, ...], column_count: int) -> int:
+    """Conservatively estimate a row's size after SQL literal escaping."""
+    value_bytes = 0
+    for value in row:
+        if value is None:
+            continue
+        if isinstance(value, bytes):
+            size = len(value)
+        elif isinstance(value, str):
+            size = len(value.encode("utf-8"))
+        else:
+            size = len(str(value).encode("utf-8"))
+        # Quotes and backslashes can be escaped, roughly doubling string size.
+        value_bytes += size * 2
+    return value_bytes + column_count * 16 + 128
+
+
+def _executemany_with_packet_limit(cursor, statement: str, rows: list[tuple[Any, ...]],
+                                  max_allowed_packet: int, column_count: int) -> None:
+    """Split inserts so each generated multi-row statement stays below MySQL's packet limit."""
+    # Leave headroom for statement syntax and differences between this estimate
+    # and mysql-connector's escaping/encoding.
+    budget = max(1, int(max_allowed_packet * 0.7))
+    chunk: list[tuple[Any, ...]] = []
+    chunk_size = 0
+    for row in rows:
+        row_size = _estimated_sql_row_size(row, column_count)
+        if row_size > budget:
+            if chunk:
+                cursor.executemany(statement, chunk)
+                chunk = []
+                chunk_size = 0
+            # Try the row by itself: estimates are intentionally conservative, so
+            # it may still fit. If it does not, MySQL returns the usual packet error.
+            cursor.executemany(statement, [row])
+            continue
+        if chunk and chunk_size + row_size > budget:
+            cursor.executemany(statement, chunk)
+            chunk = []
+            chunk_size = 0
+        chunk.append(row)
+        chunk_size += row_size
+    if chunk:
+        cursor.executemany(statement, chunk)
+
+
 def drop_destination_tables(destination, table_names: list[str]) -> None:
     """Drop selected destination tables before recreating them from source."""
     cursor = destination.cursor()
@@ -190,6 +236,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     mapping_db = open_mapping_store(mapping_store) if mapping_store else None
     source_locked = False
     try:
+        dst.execute("SELECT @@max_allowed_packet")
+        max_allowed_packet = int(dst.fetchone()[0])
         if non_transactional:
             # MySQL releases table locks on START TRANSACTION. Disable autocommit first,
             # then hold explicit READ locks across DDL inspection and all row reads.
@@ -277,7 +325,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                             mapping_rows.append((name, col, str(original_value), str(new_value)))
                     output.append(tuple(values))
                 try:
-                    dst.executemany(insert, output)
+                    _executemany_with_packet_limit(dst, insert, output,
+                                                   max_allowed_packet, len(names))
                 except mysql.connector.Error as exc:
                     first_row = count + 1
                     last_row = count + len(output)
