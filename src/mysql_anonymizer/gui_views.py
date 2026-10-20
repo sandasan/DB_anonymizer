@@ -291,7 +291,7 @@ class ViewMixin:
         ttk.Label(editor, text="Transform").grid(row=0, column=3, sticky="e")
         self.rules_edit_type_box = ttk.Combobox(
             editor, textvariable=self.rules_edit_type, state="readonly", width=14,
-            values=("email", "phone", "name", "address", "date_shift", "constant", "unique"),
+            values=("email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"),
         )
         self.rules_edit_type_box.grid(row=0, column=4, padx=4)
         self.rules_edit_type_box.bind("<<ComboboxSelected>>", lambda _event: self._rules_editor_type_changed())
