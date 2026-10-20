@@ -197,11 +197,17 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                   completed_counts: dict[str, int] | None = None,
                   pause_event=None,
                   resume: bool = False) -> dict[str, int]:
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size must be a positive integer")
     all_tables = inspect_schema(source, schema)
     dst_check = destination.cursor()
     dst_check.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()")
     existing_destination_tables = {row[0] for row in dst_check.fetchall()}
     dst_check.close()
+    explicitly_selected = (
+        set(selected_tables) if selected_tables is not None
+        else {table["name"] for table in all_tables}
+    )
     selected_names = set(resolve_table_selection(
         all_tables, selected_tables, include_dependencies, existing_destination_tables))
     # A table may still be selected in the UI after an earlier copy. If another
@@ -214,7 +220,10 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         for dependency in table.get("references", [])
         if dependency in existing_destination_tables
     }
-    selected_names.difference_update(referenced_existing)
+    # Reuse existing destination tables only when they were added solely as
+    # dependencies. Explicitly selected tables must remain selected so collision
+    # checks (or resume handling) can report and process them correctly.
+    selected_names.difference_update(referenced_existing - explicitly_selected)
     tables = [table for table in all_tables if table["name"] in selected_names]
     table_positions = {table["name"]: index for index, table in enumerate(tables, start=1)}
     completed_counts = dict(completed_counts or {})

@@ -9,22 +9,48 @@ def qname(schema: str, table: str) -> str:
 
 def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
     cur = conn.cursor(dictionary=True)
-    cur.execute("SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME", (schema,))
-    tables = cur.fetchall()
-    result = []
-    for t in tables:
-        cur.execute("SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s ORDER BY ORDINAL_POSITION", (schema, t["TABLE_NAME"]))
-        columns = cur.fetchall()
-        cur.execute("""SELECT DISTINCT REFERENCED_TABLE_NAME AS table_name
-                       FROM information_schema.KEY_COLUMN_USAGE
-                       WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s
-                         AND REFERENCED_TABLE_NAME IS NOT NULL""",
-                    (schema, t["TABLE_NAME"]))
-        references = [row["table_name"] for row in cur.fetchall()]
-        result.append({"name": t["TABLE_NAME"], "engine": t["ENGINE"],
-                       "columns": columns, "references": references})
-    cur.close()
-    return result
+    try:
+        cur.execute(
+            "SELECT TABLE_NAME, ENGINE FROM information_schema.TABLES "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE' ORDER BY TABLE_NAME",
+            (schema,),
+        )
+        tables = cur.fetchall()
+        if not tables:
+            return []
+
+        cur.execute(
+            "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY, EXTRA "
+            "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s "
+            "ORDER BY TABLE_NAME, ORDINAL_POSITION",
+            (schema,),
+        )
+        columns_by_table: dict[str, list[dict[str, Any]]] = {}
+        for column in cur.fetchall():
+            columns_by_table.setdefault(column["TABLE_NAME"], []).append({
+                key: value for key, value in column.items() if key != "TABLE_NAME"
+            })
+
+        cur.execute(
+            "SELECT DISTINCT TABLE_NAME, REFERENCED_TABLE_NAME "
+            "FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=%s "
+            "AND REFERENCED_TABLE_NAME IS NOT NULL",
+            (schema,),
+        )
+        references_by_table: dict[str, list[str]] = {}
+        for reference in cur.fetchall():
+            references_by_table.setdefault(reference["TABLE_NAME"], []).append(
+                reference["REFERENCED_TABLE_NAME"]
+            )
+
+        return [{
+            "name": table["TABLE_NAME"],
+            "engine": table["ENGINE"],
+            "columns": columns_by_table.get(table["TABLE_NAME"], []),
+            "references": references_by_table.get(table["TABLE_NAME"], []),
+        } for table in tables]
+    finally:
+        cur.close()
 
 
 def resolve_table_selection(tables: list[dict[str, Any]], selected_tables: list[str] | None,

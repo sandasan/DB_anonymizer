@@ -12,7 +12,14 @@ def check_config(config: dict) -> None:
         if role not in config or not config[role].get("database"):
             raise ValueError(f"Config requires {role}.database")
     s, d = config["source"], config["destination"]
-    if (s.get("host", "localhost").lower(), s.get("port", 3306), s["database"]) == (d.get("host", "localhost").lower(), d.get("port", 3306), d["database"]):
+    def identity(settings: dict) -> tuple[str, int, str]:
+        return (
+            str(settings.get("host", "localhost")).casefold(),
+            int(settings.get("port", 3306)),
+            str(settings["database"]).casefold(),
+        )
+
+    if identity(s) == identity(d):
         raise ValueError("Source and destination must be different server/schema combinations")
 
 
