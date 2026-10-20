@@ -454,6 +454,8 @@ class ViewMixin:
         self.browse_column = tk.StringVar()
         self.browse_column_value = tk.StringVar()
         self.browse_tables_by_role: dict[str, list[dict[str, Any]]] = {}
+        self.browse_raw_values: dict[str, tuple[Any, ...]] = {}
+        self.browse_copy_target: tuple[str, int] | None = None
         controls = ttk.Frame(self.browse_tab)
         controls.pack(fill="x", pady=(0, 8))
         ttk.Label(controls, text="Database").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=3)
@@ -487,6 +489,12 @@ class ViewMixin:
         yscroll = ttk.Scrollbar(grid, orient="vertical", command=self.browse_tree.yview)
         xscroll = ttk.Scrollbar(grid, orient="horizontal", command=self.browse_tree.xview)
         self.browse_tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.browse_tree.bind("<ButtonRelease-1>", self._browse_cell_clicked, add="+")
+        self.browse_tree.bind("<Button-3>", self._browse_cell_context_menu)
+        self.browse_tree.bind("<Control-c>", self._copy_browse_cell)
+        self.browse_tree.bind("<Control-C>", self._copy_browse_cell)
+        self.browse_cell_menu = tk.Menu(self, tearoff=0)
+        self.browse_cell_menu.add_command(label="Copy cell value", command=self._copy_browse_cell)
         self.browse_tree.grid(row=0, column=0, sticky="nsew")
         yscroll.grid(row=0, column=1, sticky="ns")
         xscroll.grid(row=1, column=0, sticky="ew")
@@ -506,6 +514,47 @@ class ViewMixin:
     def _clear_browse_rows(self) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
         self.browse_tree.configure(columns=())
+        self.browse_raw_values.clear()
+        self.browse_copy_target = None
+
+    def _browse_cell_clicked(self, event) -> None:
+        self.browse_copy_target = None
+        row_id = self.browse_tree.identify_row(event.y)
+        column_id = self.browse_tree.identify_column(event.x)
+        try:
+            column_index = int(column_id.removeprefix("#")) - 1
+        except ValueError:
+            return
+        if row_id in self.browse_raw_values and 0 <= column_index < len(self.browse_raw_values[row_id]):
+            self.browse_copy_target = (row_id, column_index)
+
+    def _browse_cell_context_menu(self, event):
+        self.browse_copy_target = None
+        row_id = self.browse_tree.identify_row(event.y)
+        column_id = self.browse_tree.identify_column(event.x)
+        try:
+            column_index = int(column_id.removeprefix("#")) - 1
+        except ValueError:
+            return "break"
+        if row_id not in self.browse_raw_values or not 0 <= column_index < len(self.browse_raw_values[row_id]):
+            return "break"
+        self.browse_copy_target = (row_id, column_index)
+        self.browse_tree.selection_set(row_id)
+        self.browse_tree.focus(row_id)
+        self.browse_cell_menu.tk_popup(event.x_root, event.y_root)
+        self.browse_cell_menu.grab_release()
+        return "break"
+
+    def _copy_browse_cell(self, _event=None):
+        if self.browse_copy_target is None:
+            return "break"
+        row_id, column_index = self.browse_copy_target
+        values = self.browse_raw_values.get(row_id)
+        if values is None or not 0 <= column_index < len(values):
+            return "break"
+        self.clipboard_clear()
+        self.clipboard_append(self._browse_value_text(values[column_index]))
+        return "break"
 
     def _render_source_tables(self) -> None:
         self._sync_table_selection(propose_marks=False)
@@ -654,22 +703,29 @@ class ViewMixin:
 
     def _display_browse_rows(self, columns: list[str], rows: list[tuple[Any, ...]]) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
+        self.browse_raw_values.clear()
+        self.browse_copy_target = None
         identifiers = [f"column_{index}" for index in range(len(columns))]
         self.browse_tree.configure(columns=identifiers)
         for identifier, name in zip(identifiers, columns):
             self.browse_tree.heading(identifier, text=name)
             self.browse_tree.column(identifier, width=150, minwidth=80, stretch=True)
-        for row in rows:
+        for row_index, row in enumerate(rows):
             values = []
             for value in row:
-                if value is None:
-                    display = "NULL"
-                elif isinstance(value, bytes):
-                    display = "0x" + value[:100].hex() + ("…" if len(value) > 100 else "")
-                else:
-                    display = str(value)
+                display = self._browse_value_text(value)
                 values.append(display[:500] + ("…" if len(display) > 500 else ""))
-            self.browse_tree.insert("", "end", values=values)
+            row_id = f"browse_row_{row_index}"
+            self.browse_raw_values[row_id] = tuple(row)
+            self.browse_tree.insert("", "end", iid=row_id, values=values)
+
+    @staticmethod
+    def _browse_value_text(value: Any) -> str:
+        if value is None:
+            return "NULL"
+        if isinstance(value, bytes):
+            return "0x" + value.hex()
+        return str(value)
 
     def _select_all(self) -> None:
         self._table_selected_names = {table["name"] for table in self.tables}
