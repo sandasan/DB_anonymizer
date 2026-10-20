@@ -89,7 +89,7 @@ class SettingsMixin:
             tables_view = config.get("tables_view", {})
             if not isinstance(tables_view, dict):
                 tables_view = {}
-            self.include_dependencies.set(bool(tables_view.get("include_dependencies", False)))
+            self.include_dependencies.set(bool(tables_view.get("include_dependencies", True)))
             selection = tables_view.get("selected_tables", [])
             self.saved_table_selection = [name for name in selection if isinstance(name, str)] if isinstance(selection, list) else []
             if self.tables:

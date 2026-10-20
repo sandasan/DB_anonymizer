@@ -98,7 +98,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self._load_last_paths()
         self.auto_confirm_operations = tk.BooleanVar(value=self.saved_auto_confirm_operations)
         self.allow_locks = tk.BooleanVar(value=False)
-        self.include_dependencies = tk.BooleanVar(value=False)
+        self.include_dependencies = tk.BooleanVar(value=True)
         self.saved_table_selection: list[str] = []
         self.connection_fields: dict[str, dict[str, tk.StringVar]] = {}
         self.password_fields: dict[str, tk.StringVar] = {}

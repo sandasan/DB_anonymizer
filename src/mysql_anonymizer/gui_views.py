@@ -153,7 +153,10 @@ class ViewMixin:
             toolbar, text="Clear destination data", command=self._clear_destination_data
         )
         self.clear_destination_button.pack(side="right", padx=(0, 8))
-        ttk.Checkbutton(toolbar, text="Include referenced tables automatically", variable=self.include_dependencies).pack(side="left", padx=12)
+        ttk.Checkbutton(
+            toolbar, text="Include referenced tables automatically", variable=self.include_dependencies,
+            command=self._sync_table_selection,
+        ).pack(side="left", padx=12)
         ttk.Checkbutton(toolbar, text="Allow source table locks for non-InnoDB", variable=self.allow_locks).pack(side="left", padx=12)
         filter_bar = ttk.Frame(self.tables_tab)
         filter_bar.pack(fill="x", pady=(0, 6))
@@ -547,6 +550,19 @@ class ViewMixin:
                             for item in self.table_list.selection()}
         self._table_selected_names.difference_update(visible_names)
         self._table_selected_names.update(selected_visible)
+        if self.include_dependencies.get() and self._table_selected_names:
+            by_name = {table["name"]: table for table in self.tables}
+            pending = list(self._table_selected_names)
+            while pending:
+                current = pending.pop()
+                for dependency in by_name.get(current, {}).get("references", []):
+                    if dependency not in self._table_selected_names:
+                        self._table_selected_names.add(dependency)
+                        pending.append(dependency)
+            for item_id in self.table_list.get_children():
+                name = self.table_list.item(item_id, "values")[1]
+                if name in self._table_selected_names:
+                    self.table_list.selection_add(item_id)
 
     def _selected_table_names(self) -> list[str]:
         self._sync_table_selection()
