@@ -68,6 +68,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
         self.copied_table_names: set[str] = set()
+        self.recreated_table_names: set[str] = set()
+        self.recreated_destination_identity: tuple[str, str, str] | None = None
         self.source_inspected = False
         self.messages: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.busy = False
@@ -397,6 +399,13 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         return {key: source.get(key) for key in ("host", "port", "database", "user")}
 
     @staticmethod
+    def _destination_identity(config: dict[str, Any]) -> tuple[str, str, str]:
+        destination = config["destination"]
+        return (str(destination.get("host", "")).casefold(),
+                str(destination.get("port", "3306")),
+                str(destination.get("database", "")).casefold())
+
+    @staticmethod
     def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
         schema = [{
             "name": table["name"],
@@ -422,21 +431,54 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.messages.put(("copy_schema_check", unchanged))
 
     def _recreate_selected_tables(self) -> None:
-        if self.copy_resume_state is not None:
-            messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before recreating tables.")
-            return
         selected = self._selected_table_names()
         if not selected:
             messagebox.showinfo("Select tables", "Select the source tables to recreate in the destination.")
             return
+        pending_state = self.copy_resume_state
+        unfinished: list[str] = []
+        if pending_state is not None:
+            pending_tables = pending_state.get("selected", [])
+            completed_tables = pending_state.get("completed_counts", {})
+            if isinstance(pending_tables, list) and isinstance(completed_tables, dict):
+                unfinished = [name for name in pending_tables
+                              if isinstance(name, str) and name not in completed_tables]
+            selected = list(dict.fromkeys([*selected, *unfinished]))
         destination = self.connection_fields["destination"]["database"].get().strip()
         names = "\n".join(f"  {name}" for name in selected)
+        if pending_state is not None:
+            pending_names = "\n".join(f"  {name}" for name in unfinished) or "  (none)"
+            prompt = (
+                "A previous copy is paused or interrupted. Continuing will discard its resume checkpoint. "
+                "Any unfinished tables from that copy will be added to this recreation, dropped, and copied again. "
+                "Completed tables from the previous copy will be kept unless selected below.\n\n"
+                f"Unfinished tables to include:\n{pending_names}\n\n"
+                f"Tables to recreate:\n{names}\n\n"
+                f"Destination database: {destination}\n\nContinue and discard the saved checkpoint?"
+            )
+            title = "Discard previous copy and recreate tables"
+        else:
+            prompt = (
+                "This will permanently drop these destination tables, then recreate and recopy them from the source:\n\n"
+                f"{names}\n\nDestination database: {destination}\n\nContinue?"
+            )
+            title = "Recreate destination tables"
         if not messagebox.askyesno(
-            "Recreate destination tables",
-            f"This will permanently drop these destination tables, then recreate and recopy them from the source:\n\n"
-            f"{names}\n\nDestination database: {destination}\n\nContinue?",
+            title,
+            prompt,
         ):
             return
+        if pending_state is not None:
+            try:
+                self._resume_copy_path().unlink(missing_ok=True)
+            except OSError as exc:
+                messagebox.showerror("Could not discard saved copy", str(exc))
+                return
+            self.copy_resume_state = None
+            self.pause_event = None
+            self._table_selected_names.update(unfinished)
+            self._render_source_tables()
+        self._log(f"Starting destination table recreation for {len(selected)} selected table(s).")
         self._copy(action="replace_tables")
 
     def _recreate_destination_database(self) -> None:
@@ -657,7 +699,9 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     include_dependencies,
                     existing_tables - set(selected),
                 )
+                self.messages.put(("operation_status", f"Dropping {len(selected)} destination table(s)…"))
                 drop_destination_tables(destination, selected)
+                self.messages.put(("log", "Destination tables dropped; recreating from source…"))
             self.messages.put(("progress", {"event": "copy_started"}))
 
             def report_progress(progress: dict[str, Any]) -> None:
@@ -703,7 +747,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             report.append("Not copied tables:")
             report.extend(f"  {name}" for name in not_copied) if not_copied else report.append("  (none)")
             self.messages.put(("log", "\n".join(report)))
-            self.messages.put(("copied_tables", set(counts)))
+            self.messages.put(("copied_tables", (set(counts), action, self._destination_identity(config))))
         finally:
             if destination is not None:
                 destination.close()
@@ -733,6 +777,11 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 break
             if kind == "tables":
                 self.tables, self.copied_table_names, config = value
+                destination_identity = self._destination_identity(config)
+                if self.recreated_destination_identity != destination_identity:
+                    self.recreated_table_names.clear()
+                    self.recreated_destination_identity = destination_identity
+                self.recreated_table_names.intersection_update(self.copied_table_names)
                 self.table_names = [table["name"] for table in self.tables]
                 self.source_inspected = True
                 self.inspection_stale = False
@@ -766,11 +815,19 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                         "Run Inspect source again before copying.",
                     )
             elif kind == "copied_tables":
-                self.copied_table_names.update(value)
-                self._table_selected_names.difference_update(value)
+                copied_names, action, destination_identity = value
+                self.copied_table_names.update(copied_names)
+                if action in {"replace_tables", "recreate_database"}:
+                    if self.recreated_destination_identity != destination_identity:
+                        self.recreated_table_names.clear()
+                        self.recreated_destination_identity = destination_identity
+                    self.recreated_table_names.update(copied_names)
+                self._table_selected_names.difference_update(copied_names)
                 self._render_source_tables()
             elif kind == "log":
                 self._log(value)
+            elif kind == "operation_status":
+                self.status.set(value)
             elif kind == "progress":
                 self._show_progress(value)
             elif kind == "copy_paused":

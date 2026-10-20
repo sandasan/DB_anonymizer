@@ -190,7 +190,7 @@ class ViewMixin:
         xscroll.grid(row=1, column=0, sticky="ew")
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=1)
-        ttk.Label(self.tables_tab, text="✓ marks tables already present in the destination. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
+        ttk.Label(self.tables_tab, text="✓ marks tables present in the destination; ↻ marks tables recreated by this session. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
 
     def _build_rules(self) -> None:
         toolbar = ttk.Frame(self.rules_tab)
@@ -480,7 +480,7 @@ class ViewMixin:
         if query:
             indexed_tables = [(index, table) for index, table in indexed_tables
                               if query in " ".join((
-                                  "✓" if table.get("name") in self.copied_table_names else "",
+                                  self._table_destination_mark(table.get("name")),
                                   table.get("name", ""),
                                   str(table.get("row_count") if table.get("row_count") is not None else ""),
                                   self._format_size(table.get("size_bytes")),
@@ -492,7 +492,7 @@ class ViewMixin:
                             reverse=self.table_sort_reverse)
         for index, table in indexed_tables:
             name = table["name"]
-            mark = "✓" if name in self.copied_table_names else ""
+            mark = self._table_destination_mark(name)
             row_count = table.get("row_count")
             count = f"{row_count:,}" if row_count is not None else "—"
             if count != "—" and table.get("row_count_is_estimate"):
@@ -505,14 +505,22 @@ class ViewMixin:
                                    values=(mark, name, count, size, eta, refs))
             if name in selected_names:
                 self.table_list.selection_add(item_id)
-            if name in self.copied_table_names:
+            if name in self.recreated_table_names:
+                self.table_list.item(item_id, tags=("recreated",))
+            elif name in self.copied_table_names:
                 self.table_list.item(item_id, tags=("copied",))
+        self.table_list.tag_configure("recreated", foreground="#6941a5", background="#f4effb")
         self.table_list.tag_configure("copied", foreground="#167246", background="#f0faf4")
         for index, item_id in enumerate(self.table_list.get_children()):
             if not self.table_list.item(item_id, "tags"):
                 self.table_list.item(item_id, tags=("even" if index % 2 == 0 else "odd",))
         self.table_list.tag_configure("even", background="white")
         self.table_list.tag_configure("odd", background="#f7f9fc")
+
+    def _table_destination_mark(self, name: str) -> str:
+        if name in self.recreated_table_names:
+            return "↻"
+        return "✓" if name in self.copied_table_names else ""
 
     def _sync_table_selection(self, _event=None) -> None:
         if not hasattr(self, "table_list"):
