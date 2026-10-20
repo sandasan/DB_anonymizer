@@ -36,6 +36,41 @@ from .core import (
 )
 
 
+def _delete_previous_word(event: tk.Event) -> str:
+    """Make Ctrl+Backspace delete the word before the caret in Tk text inputs."""
+    widget = event.widget
+    try:
+        if isinstance(widget, tk.Text):
+            if widget.tag_ranges("sel"):
+                widget.delete("sel.first", "sel.last")
+            else:
+                line_start = widget.index("insert linestart")
+                search_from = "insert"
+                if widget.compare("insert", "==", line_start) and not widget.compare("insert", "==", "1.0"):
+                    search_from = "insert -1c"
+                start = widget.search(
+                    r"\s*\S+\s*$", search_from, backwards=True,
+                    regexp=True, stopindex=line_start,
+                )
+                if start:
+                    widget.delete(start, "insert")
+            return "break"
+
+        if widget.selection_present():
+            start = int(widget.index("sel.first"))
+            end = int(widget.index("sel.last"))
+            widget.delete(start, end)
+        else:
+            cursor = int(widget.index("insert"))
+            before_cursor = widget.get()[:cursor]
+            match = re.search(r"\s*\S+\s*$", before_cursor)
+            if match:
+                widget.delete(match.start(), cursor)
+        return "break"
+    except (tk.TclError, AttributeError, TypeError, ValueError):
+        return "break"
+
+
 def connect_with_guidance(role: str, settings: dict[str, Any]):
     try:
         return connect(settings)
@@ -65,6 +100,8 @@ def connect_with_guidance(role: str, settings: dict[str, Any]):
 class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
     def __init__(self) -> None:
         super().__init__()
+        for widget_class in ("Entry", "TEntry", "TCombobox", "Text"):
+            self.bind_class(widget_class, "<Control-BackSpace>", _delete_previous_word)
         self.title("MySQL Anonymized Copy")
         self.geometry("1120x820")
         self.minsize(900, 680)
