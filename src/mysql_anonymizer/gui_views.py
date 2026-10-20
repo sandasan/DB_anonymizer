@@ -34,13 +34,17 @@ class ViewMixin:
         style.configure("Horizontal.TProgressbar", thickness=9, troughcolor="#e0e6ef", background="#3975e8")
 
     def _build_ui(self) -> None:
-        paths = ttk.Frame(self, padding=(12, 12, 12, 4))
+        self.main_panes = ttk.PanedWindow(self, orient="vertical")
+        self.main_panes.pack(fill="both", expand=True)
+        header = ttk.Frame(self.main_panes)
+        self.main_panes.add(header, weight=0)
+        paths = ttk.Frame(header, padding=(12, 12, 12, 4))
         paths.pack(fill="x")
         self._config_path_row(paths, 0)
         self._rules_path_row(paths, 1)
         self._path_row(paths, 2, "Mapping store (optional)", self.mapping_path, self._choose_mapping)
         self._profile_row(paths, 3)
-        actions = ttk.Frame(self, padding=(12, 4, 12, 4))
+        actions = ttk.Frame(header, padding=(12, 4, 12, 4))
         actions.pack(fill="x")
         self.save_config_button = ttk.Button(actions, text="Save config", command=self._save_config, width=14)
         self.save_config_button.pack(side="left")
@@ -58,7 +62,7 @@ class ViewMixin:
         self.copy_button.pack(side="right")
         self.pause_button = ttk.Button(actions, text="Pause copy", command=self._request_pause, state="disabled", width=14)
         self.pause_button.pack(side="right", padx=(0, 8))
-        progress_panel = ttk.Frame(self, padding=(12, 0, 12, 4))
+        progress_panel = ttk.Frame(header, padding=(12, 0, 12, 4))
         progress_panel.pack(fill="x")
         self.overall_progress_title = tk.StringVar(value="Overall progress")
         ttk.Label(progress_panel, textvariable=self.overall_progress_title, style="Heading.TLabel").pack(anchor="w")
@@ -70,8 +74,8 @@ class ViewMixin:
         self.table_progress.pack(fill="x", pady=(0, 4))
         self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
         ttk.Label(progress_panel, textvariable=self.status, foreground="#52637a").pack(anchor="w", pady=(2, 0))
-        self.tabs_widget = ttk.Notebook(self)
-        self.tabs_widget.pack(fill="both", expand=True, padx=12, pady=8)
+        self.tabs_widget = ttk.Notebook(self.main_panes)
+        self.main_panes.add(self.tabs_widget, weight=1)
         self.connection_tab = ttk.Frame(self.tabs_widget, padding=16)
         self.tables_tab = ttk.Frame(self.tabs_widget, padding=12)
         self.rules_tab = ttk.Frame(self.tabs_widget, padding=12)
@@ -87,12 +91,12 @@ class ViewMixin:
         self._build_rules()
         self._build_lookup()
         self._build_browse()
-        footer = ttk.Frame(self, padding=(12, 4, 12, 8))
-        footer.pack(fill="x")
+        footer = ttk.Frame(self.main_panes, padding=(12, 4, 12, 8))
         self.output = tk.Text(footer, height=4, wrap="word", state="disabled")
         self.output.configure(background="#fbfcfe", foreground="#435168", relief="flat", padx=9, pady=7,
                               font=("TkFixedFont", 9), highlightthickness=1, highlightbackground="#dce2eb")
         self.output.pack(fill="x")
+        self.main_panes.add(footer, weight=0)
 
     def _config_path_row(self, parent: ttk.Frame, row: int) -> None:
         ttk.Label(parent, text="Config", width=22).grid(row=row, column=0, sticky="w", pady=2)
@@ -129,9 +133,11 @@ class ViewMixin:
         parent.columnconfigure(1, weight=1)
 
     def _build_connections(self) -> None:
-        for col, role in enumerate(("source", "destination")):
-            frame = ttk.LabelFrame(self.connection_tab, text=role.title(), padding=12)
-            frame.grid(row=0, column=col, sticky="nsew", padx=(0, 8) if col == 0 else (8, 0))
+        panes = ttk.PanedWindow(self.connection_tab, orient="horizontal")
+        panes.pack(fill="both", expand=True)
+        for role in ("source", "destination"):
+            frame = ttk.LabelFrame(panes, text=role.title(), padding=12)
+            panes.add(frame, weight=1)
             fields: dict[str, tk.StringVar] = {}
             defaults = {"host": "127.0.0.1", "port": "3306", "database": "", "user": ""}
             for row, key in enumerate(("host", "port", "database", "user")):
@@ -148,8 +154,6 @@ class ViewMixin:
             )
             frame.columnconfigure(1, weight=1)
             self.connection_fields[role] = fields
-        self.connection_tab.columnconfigure(0, weight=1)
-        self.connection_tab.columnconfigure(1, weight=1)
 
     def _build_tables(self) -> None:
         toolbar = ttk.Frame(self.tables_tab)
@@ -259,8 +263,12 @@ class ViewMixin:
         self.rules_status_filter_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh_rules_preview())
         ttk.Button(filters, text="Reset filters", command=self._reset_rules_filters).pack(side="left", padx=(8, 0))
         self.rules_search.trace_add("write", lambda *_args: self._refresh_rules_preview())
-        preview_frame = ttk.Frame(self.rules_tab)
-        preview_frame.pack(fill="both", expand=True, pady=(0, 8))
+        rule_panes = ttk.PanedWindow(self.rules_tab, orient="vertical")
+        rule_panes.pack(fill="both", expand=True)
+        preview_panel = ttk.Frame(rule_panes)
+        rule_panes.add(preview_panel, weight=1)
+        preview_frame = ttk.Frame(preview_panel)
+        preview_frame.pack(fill="both", expand=True, pady=(0, 4))
         self.rules_preview = ttk.Treeview(
             preview_frame, columns=("table", "column", "status"), show="headings", height=8,
         )
@@ -277,8 +285,10 @@ class ViewMixin:
         self.rules_preview.bind("<Double-1>", self._rules_preview_navigate)
         self.rules_preview.bind("<<TreeviewSelect>>", self._rules_editor_load_selection)
         self.rules_preview_status = tk.StringVar(value="Inspect the source to compare rules with its columns.")
-        ttk.Label(self.rules_tab, textvariable=self.rules_preview_status).pack(anchor="w", pady=(0, 4))
-        editor = ttk.LabelFrame(self.rules_tab, text="Edit selected column", padding=8)
+        ttk.Label(preview_panel, textvariable=self.rules_preview_status).pack(anchor="w", pady=(0, 4))
+        editor_panel = ttk.Frame(rule_panes)
+        rule_panes.add(editor_panel, weight=2)
+        editor = ttk.LabelFrame(editor_panel, text="Edit selected column", padding=8)
         editor.pack(fill="x", pady=(0, 8))
         self.rules_edit_selection = tk.StringVar(value="Select a column above")
         ttk.Label(editor, textvariable=self.rules_edit_selection, width=28).grid(row=0, column=0, sticky="w", padx=(0, 8))
@@ -304,10 +314,10 @@ class ViewMixin:
         self.rules_edit_status = tk.StringVar(value="Choose a rule mode and apply it to the selected column.")
         ttk.Label(editor, textvariable=self.rules_edit_status).grid(row=1, column=0, columnspan=9, sticky="w", pady=(6, 0))
         self._rules_editor_mode_changed()
-        self.rules_editor = tk.Text(self.rules_tab, wrap="none", undo=True)
+        self.rules_editor = tk.Text(editor_panel, wrap="none", undo=True)
         self.rules_editor.pack(fill="both", expand=True)
         self.rules_editor.bind("<KeyRelease>", lambda _event: self._schedule_rules_preview())
-        ttk.Label(self.rules_tab, text="Review generated rules carefully before copying. Use the navigator to find columns; edit the JSON below and save when ready.").pack(anchor="w", pady=(8, 0))
+        ttk.Label(editor_panel, text="Review generated rules carefully before copying. Use the navigator to find columns; edit the JSON below and save when ready.").pack(anchor="w", pady=(8, 0))
         self._refresh_rules_preview()
 
     def _reset_rules_filters(self) -> None:
@@ -592,8 +602,10 @@ class ViewMixin:
         self.browse_tables_by_role: dict[str, list[dict[str, Any]]] = {}
         self.browse_raw_values: dict[str, tuple[Any, ...]] = {}
         self.browse_copy_target: tuple[str, int] | None = None
-        controls = ttk.Frame(self.browse_tab)
-        controls.pack(fill="x", pady=(0, 8))
+        browse_panes = ttk.PanedWindow(self.browse_tab, orient="vertical")
+        browse_panes.pack(fill="both", expand=True)
+        controls = ttk.Frame(browse_panes)
+        browse_panes.add(controls, weight=0)
         ttk.Label(controls, text="Database").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=3)
         self.browse_role_box = ttk.Combobox(controls, textvariable=self.browse_role,
                                             values=("source", "destination"), state="readonly", width=12)
@@ -619,7 +631,9 @@ class ViewMixin:
         self.browse_search_button = ttk.Button(controls, text="Search / refresh", command=self._browse_search)
         self.browse_search_button.grid(row=3, column=4, sticky="e", padx=(8, 0), pady=3)
         controls.columnconfigure(4, weight=1)
-        grid = ttk.Frame(self.browse_tab)
+        results = ttk.Frame(browse_panes)
+        browse_panes.add(results, weight=1)
+        grid = ttk.Frame(results)
         grid.pack(fill="both", expand=True)
         self.browse_tree = ttk.Treeview(grid, show="headings")
         yscroll = ttk.Scrollbar(grid, orient="vertical", command=self.browse_tree.yview)
@@ -636,7 +650,7 @@ class ViewMixin:
         xscroll.grid(row=1, column=0, sticky="ew")
         grid.rowconfigure(0, weight=1)
         grid.columnconfigure(0, weight=1)
-        ttk.Label(self.browse_tab, text="Showing up to 200 matching rows. Search terms match anywhere within a value.").pack(anchor="w", pady=(6, 0))
+        ttk.Label(results, text="Showing up to 200 matching rows. Search terms match anywhere within a value.").pack(anchor="w", pady=(6, 0))
 
     def _browse_update_columns(self) -> None:
         role = self.browse_role.get()
