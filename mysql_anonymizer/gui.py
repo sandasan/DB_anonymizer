@@ -70,6 +70,7 @@ class AnonymizerApp(tk.Tk):
         self.copy_started_at: float | None = None
         self.pause_event: threading.Event | None = None
         self.copy_in_progress = False
+        self.inspection_in_progress = False
         self.close_when_paused = False
         self.copy_resume_state: dict[str, Any] | None = None
 
@@ -235,10 +236,12 @@ class AnonymizerApp(tk.Tk):
 
         progress_panel = ttk.Frame(self, padding=(12, 0, 12, 4))
         progress_panel.pack(fill="x")
-        ttk.Label(progress_panel, text="Overall copy progress", style="Heading.TLabel").pack(anchor="w")
+        self.overall_progress_title = tk.StringVar(value="Overall progress")
+        ttk.Label(progress_panel, textvariable=self.overall_progress_title, style="Heading.TLabel").pack(anchor="w")
         self.overall_progress = ttk.Progressbar(progress_panel, mode="determinate", maximum=1, value=0)
         self.overall_progress.pack(fill="x", pady=(0, 3))
-        ttk.Label(progress_panel, text="Current table", style="Heading.TLabel").pack(anchor="w")
+        self.table_progress_title = tk.StringVar(value="Current table")
+        ttk.Label(progress_panel, textvariable=self.table_progress_title, style="Heading.TLabel").pack(anchor="w")
         self.table_progress = ttk.Progressbar(progress_panel, mode="determinate", maximum=1, value=0)
         self.table_progress.pack(fill="x", pady=(0, 4))
         self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
@@ -835,8 +838,16 @@ class AnonymizerApp(tk.Tk):
     def _inspect(self) -> None:
         try:
             config = self._config()
+            self.overall_progress.configure(mode="indeterminate", maximum=1, value=0)
+            self.overall_progress.start(12)
+            self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
+            self.table_progress.start(12)
+            self.status.set("Connecting to source and reading schema…")
+            self.inspection_in_progress = True
             self._run_async("Inspecting source schema…", self._inspect_worker, config)
         except Exception as exc:
+            self.inspection_in_progress = False
+            self._reset_inspection_progress()
             messagebox.showerror("Invalid connection settings", str(exc))
 
     def _test_connections(self) -> None:
@@ -863,7 +874,9 @@ class AnonymizerApp(tk.Tk):
     def _inspect_worker(self, config: dict[str, Any]) -> None:
         source = connect_with_guidance("source", config["source"])
         try:
+            self.messages.put(("inspect_progress", {"phase": "schema"}))
             tables = inspect_schema(source, config["source"]["database"])
+            self.messages.put(("inspect_progress", {"phase": "counts_start", "total": len(tables)}))
             cursor = source.cursor()
             cursor.execute(
                 "SELECT TABLE_NAME, DATA_LENGTH, INDEX_LENGTH "
@@ -872,10 +885,18 @@ class AnonymizerApp(tk.Tk):
             )
             sizes = {name: (data_length or 0) + (index_length or 0)
                      for name, data_length, index_length in cursor.fetchall()}
-            for table in tables:
+            for index, table in enumerate(tables, start=1):
+                self.messages.put(("inspect_progress", {
+                    "phase": "count_start", "table": table["name"], "index": index,
+                    "total": len(tables),
+                }))
                 cursor.execute(f"SELECT COUNT(*) FROM `{table['name'].replace('`', '``')}`")
                 table["row_count"] = cursor.fetchone()[0]
                 table["size_bytes"] = sizes.get(table["name"], 0)
+                self.messages.put(("inspect_progress", {
+                    "phase": "count_done", "table": table["name"], "index": index,
+                    "total": len(tables),
+                }))
             cursor.close()
         finally:
             source.close()
@@ -1132,6 +1153,11 @@ class AnonymizerApp(tk.Tk):
                 self._render_source_tables()
                 self._refresh_rules_preview()
                 self._log(f"Found {len(self.tables)} source tables.")
+                self._reset_inspection_progress()
+                self.inspection_in_progress = False
+                self.status.set(f"Inspection complete. Found {len(self.tables)} source table(s).")
+            elif kind == "inspect_progress":
+                self._show_inspection_progress(value)
             elif kind == "copied_tables":
                 self.copied_table_names.update(value)
                 self._render_source_tables()
@@ -1200,11 +1226,14 @@ class AnonymizerApp(tk.Tk):
                     self.status.set(f"Operation failed after {self._format_duration(elapsed)}.")
                 else:
                     self.status.set("Operation failed.")
+                if self.inspection_in_progress:
+                    self._reset_inspection_progress()
+                    self.inspection_in_progress = False
                 self.copy_started_at = None
                 self._log("Error: " + value)
                 messagebox.showerror("Operation failed", value)
             elif kind == "done":
-                if not self.status.get().startswith(("Showing ", "Copy complete.", "Copy paused")):
+                if not self.status.get().startswith(("Showing ", "Copy complete.", "Copy paused", "Inspection complete")):
                     self.status.set("Ready.")
             if kind in {"error", "done"}:
                 self.busy = False
@@ -1232,6 +1261,48 @@ class AnonymizerApp(tk.Tk):
     def _clear_browse_rows(self) -> None:
         self.browse_tree.delete(*self.browse_tree.get_children())
         self.browse_tree.configure(columns=())
+
+    def _show_inspection_progress(self, progress: dict[str, Any]) -> None:
+        phase = progress.get("phase")
+        self.overall_progress_title.set("Overall inspection progress")
+        self.table_progress_title.set("Current table inspection")
+        if phase in {"schema", "counts_start"}:
+            self.overall_progress.stop()
+            self.table_progress.stop()
+        if phase == "schema":
+            self.overall_progress.configure(mode="indeterminate", maximum=1, value=0)
+            self.overall_progress.start(12)
+            self.table_progress.configure(mode="determinate", maximum=1, value=0)
+            self.status.set("Reading source tables, columns, and foreign keys…")
+        elif phase == "counts_start":
+            total = progress.get("total", 0)
+            self.overall_progress.configure(mode="determinate", maximum=max(total, 1), value=0)
+            self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
+            if total:
+                self.table_progress.start(12)
+            self.status.set(f"Counting records in {total} table(s)…")
+        elif phase == "count_start":
+            self.overall_progress.configure(value=max(0, progress["index"] - 1))
+            self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
+            self.table_progress.start(12)
+            self.status.set(
+                f"Counting records in table {progress['index']}/{progress['total']}: {progress['table']}…"
+            )
+        elif phase == "count_done":
+            self.table_progress.stop()
+            self.table_progress.configure(mode="determinate", maximum=1, value=1)
+            self.overall_progress.configure(value=progress["index"])
+            self.status.set(
+                f"Counted table {progress['index']}/{progress['total']}: {progress['table']}"
+            )
+
+    def _reset_inspection_progress(self) -> None:
+        self.overall_progress.stop()
+        self.table_progress.stop()
+        self.overall_progress.configure(mode="determinate", maximum=1, value=0)
+        self.table_progress.configure(mode="determinate", maximum=1, value=0)
+        self.overall_progress_title.set("Overall progress")
+        self.table_progress_title.set("Current table")
 
     def _render_source_tables(self) -> None:
         selected_names = {self.table_list.item(item, "values")[1]
@@ -1291,6 +1362,8 @@ class AnonymizerApp(tk.Tk):
     def _show_progress(self, progress: dict[str, Any]) -> None:
         event = progress["event"]
         if event == "copy_started":
+            self.overall_progress_title.set("Overall copy progress")
+            self.table_progress_title.set("Current table copy progress")
             self.copy_started_at = time.monotonic()
             self.overall_progress.configure(maximum=1, value=0)
             self.table_progress.configure(maximum=1, value=0)
