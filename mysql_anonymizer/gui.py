@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import sys
@@ -71,6 +72,10 @@ class AnonymizerApp(tk.Tk):
         self.pause_event: threading.Event | None = None
         self.copy_in_progress = False
         self.inspection_in_progress = False
+        self.inspection_snapshot: dict[str, Any] | None = None
+        self.inspection_stale = False
+        self.copy_schema_verified = False
+        self.copy_after_schema_check = False
         self.close_when_paused = False
         self.copy_resume_state: dict[str, Any] | None = None
 
@@ -133,6 +138,9 @@ class AnonymizerApp(tk.Tk):
             mapping_path = state.get("mapping_path")
             if isinstance(mapping_path, str):
                 self.mapping_path.set(mapping_path)
+            snapshot = state.get("inspection_snapshot")
+            if isinstance(snapshot, dict):
+                self.inspection_snapshot = snapshot
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
 
@@ -140,11 +148,20 @@ class AnonymizerApp(tk.Tk):
         path = self._state_file()
         try:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            path.write_text(json.dumps({
+            try:
+                state = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(state, dict):
+                    state = {}
+            except (OSError, json.JSONDecodeError):
+                state = {}
+            state.update({
                 "config_path": self.config_path.get(),
                 "rules_path": self.rules_path.get(),
                 "mapping_path": self.mapping_path.get(),
-            }, indent=2) + "\n", encoding="utf-8")
+            })
+            if self.inspection_snapshot is not None:
+                state["inspection_snapshot"] = self.inspection_snapshot
+            path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
             try:
                 path.chmod(0o600)
             except OSError:
@@ -838,6 +855,8 @@ class AnonymizerApp(tk.Tk):
     def _inspect(self) -> None:
         try:
             config = self._config()
+            self.inspection_stale = False
+            self.copy_schema_verified = False
             self.overall_progress.configure(mode="indeterminate", maximum=1, value=0)
             self.overall_progress.start(12)
             self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
@@ -917,7 +936,37 @@ class AnonymizerApp(tk.Tk):
         finally:
             if destination is not None:
                 destination.close()
-        self.messages.put(("tables", (tables, destination_tables)))
+        self.messages.put(("tables", (tables, destination_tables, config)))
+
+    @staticmethod
+    def _source_identity(config: dict[str, Any]) -> dict[str, Any]:
+        source = config["source"]
+        return {key: source.get(key) for key in ("host", "port", "database", "user")}
+
+    @staticmethod
+    def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
+        schema = [{
+            "name": table["name"],
+            "engine": table.get("engine"),
+            "references": sorted(table.get("references", [])),
+            "columns": [{key: column.get(key) for key in (
+                "COLUMN_NAME", "DATA_TYPE", "COLUMN_TYPE", "IS_NULLABLE", "COLUMN_KEY", "EXTRA"
+            )} for column in table.get("columns", [])],
+        } for table in tables]
+        encoded = json.dumps(schema, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def _copy_schema_check_worker(self, config: dict[str, Any], snapshot: dict[str, Any]) -> None:
+        source = connect_with_guidance("source", config["source"])
+        try:
+            tables = inspect_schema(source, config["source"]["database"])
+        finally:
+            source.close()
+        unchanged = (
+            snapshot.get("source") == self._source_identity(config)
+            and snapshot.get("fingerprint") == self._schema_fingerprint(tables)
+        )
+        self.messages.put(("copy_schema_check", unchanged))
 
     def _copy(self) -> None:
         if self.copy_resume_state is not None:
@@ -926,6 +975,29 @@ class AnonymizerApp(tk.Tk):
         if not self.tables:
             messagebox.showinfo("Inspect source first", "Inspect the source database before copying.")
             return
+        if self.inspection_stale:
+            messagebox.showinfo("Inspect source again", "The source schema changed since its last inspection. Inspect the source again before copying.")
+            return
+        if not self.copy_schema_verified:
+            if self.inspection_snapshot is None:
+                messagebox.showinfo("Inspect source first", "Inspect the source before copying so the app can check for schema changes.")
+                return
+            try:
+                config = self._config()
+            except Exception as exc:
+                messagebox.showerror("Invalid connection settings", str(exc))
+                return
+            self.copy_after_schema_check = True
+            self.overall_progress_title.set("Checking source schema")
+            self.table_progress_title.set("Checking source schema")
+            self.overall_progress.configure(mode="indeterminate", maximum=1, value=0)
+            self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
+            self.overall_progress.start(12)
+            self.table_progress.start(12)
+            self._run_async("Checking whether the source schema changed…", self._copy_schema_check_worker,
+                            config, self.inspection_snapshot)
+            return
+        self.copy_schema_verified = False
         if not messagebox.askyesno("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules."):
             return
         try:
@@ -1147,9 +1219,16 @@ class AnonymizerApp(tk.Tk):
             except queue.Empty:
                 break
             if kind == "tables":
-                self.tables, self.copied_table_names = value
+                self.tables, self.copied_table_names, config = value
                 self.table_names = [table["name"] for table in self.tables]
                 self.source_inspected = True
+                self.inspection_stale = False
+                self.copy_schema_verified = False
+                self.inspection_snapshot = {
+                    "source": self._source_identity(config),
+                    "fingerprint": self._schema_fingerprint(self.tables),
+                }
+                self._save_last_paths()
                 self._render_source_tables()
                 self._refresh_rules_preview()
                 self._log(f"Found {len(self.tables)} source tables.")
@@ -1158,6 +1237,20 @@ class AnonymizerApp(tk.Tk):
                 self.status.set(f"Inspection complete. Found {len(self.tables)} source table(s).")
             elif kind == "inspect_progress":
                 self._show_inspection_progress(value)
+            elif kind == "copy_schema_check":
+                self._reset_inspection_progress()
+                if value:
+                    self.copy_schema_verified = True
+                    self.status.set("Source schema is unchanged. Continuing with copy setup…")
+                else:
+                    self.inspection_stale = True
+                    self.copy_schema_verified = False
+                    self.status.set("Source schema changed. Inspect the source again before copying.")
+                    messagebox.showinfo(
+                        "Source schema changed",
+                        "The source database or its table structure changed since the last inspection. "
+                        "Run Inspect source again before copying.",
+                    )
             elif kind == "copied_tables":
                 self.copied_table_names.update(value)
                 self._render_source_tables()
@@ -1210,6 +1303,9 @@ class AnonymizerApp(tk.Tk):
                 self._lookup_table_selected()
                 self._log(f"Loaded {len(tables)} mapped table(s) and their columns.")
             elif kind == "error":
+                self.copy_after_schema_check = False
+                if self.copy_schema_verified is False and self.status.get().startswith("Checking whether"):
+                    self._reset_inspection_progress()
                 if self.copy_in_progress:
                     self.copy_in_progress = False
                     if self.copy_resume_state is not None and self.copy_resume_state.get("is_resume"):
@@ -1238,6 +1334,10 @@ class AnonymizerApp(tk.Tk):
             if kind in {"error", "done"}:
                 self.busy = False
                 self._set_busy(False)
+                if kind == "done" and self.copy_after_schema_check:
+                    self.copy_after_schema_check = False
+                    if self.copy_schema_verified:
+                        self.after_idle(self._copy)
                 if kind == "done" and self.close_when_paused and not self.copy_in_progress:
                     self.after_idle(self._on_close)
                     return
