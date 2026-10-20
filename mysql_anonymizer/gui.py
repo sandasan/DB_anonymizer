@@ -85,6 +85,7 @@ class AnonymizerApp(tk.Tk):
         self._load_last_paths()
         self.allow_locks = tk.BooleanVar(value=False)
         self.include_dependencies = tk.BooleanVar(value=False)
+        self.saved_table_selection: list[str] = []
         self.connection_fields: dict[str, dict[str, tk.StringVar]] = {}
         self.password_fields: dict[str, tk.StringVar] = {}
         self._build_ui()
@@ -783,6 +784,14 @@ class AnonymizerApp(tk.Tk):
                     var.set(str(settings.get(key, "127.0.0.1" if key == "host" else "3306" if key == "port" else "")))
                 self.password_fields[role].set(str(settings.get("password", "")))
             self.allow_locks.set(bool(config.get("allow_source_table_locks", False)))
+            tables_view = config.get("tables_view", {})
+            if not isinstance(tables_view, dict):
+                tables_view = {}
+            self.include_dependencies.set(bool(tables_view.get("include_dependencies", False)))
+            selection = tables_view.get("selected_tables", [])
+            self.saved_table_selection = [name for name in selection if isinstance(name, str)] if isinstance(selection, list) else []
+            if self.tables:
+                self._restore_table_selection()
             self._save_last_paths()
             self._log(f"Loaded config from {self.config_path.get()}.")
         except Exception as exc:
@@ -805,8 +814,28 @@ class AnonymizerApp(tk.Tk):
                 old.pop("password_env", None)
             config[role] = old
         config["allow_source_table_locks"] = self.allow_locks.get()
+        tables_view = config.get("tables_view", {})
+        if not isinstance(tables_view, dict):
+            tables_view = {}
+        else:
+            tables_view = dict(tables_view)
+        selected_tables = [self.table_list.item(item, "values")[1]
+                           for item in self.table_list.selection()] if self.tables else self.saved_table_selection
+        tables_view.update({
+            "include_dependencies": self.include_dependencies.get(),
+            "selected_tables": selected_tables,
+        })
+        config["tables_view"] = tables_view
         check_config(config)
         return config
+
+    def _restore_table_selection(self) -> None:
+        available = set(self.table_names)
+        wanted = set(self.saved_table_selection) & available
+        self.table_list.selection_remove(self.table_list.selection())
+        for item_id in self.table_list.get_children():
+            if self.table_list.item(item_id, "values")[1] in wanted:
+                self.table_list.selection_add(item_id)
 
     def _save_config(self) -> None:
         try:
@@ -1230,6 +1259,7 @@ class AnonymizerApp(tk.Tk):
                 }
                 self._save_last_paths()
                 self._render_source_tables()
+                self._restore_table_selection()
                 self._refresh_rules_preview()
                 self._log(f"Found {len(self.tables)} source tables.")
                 self._reset_inspection_progress()
