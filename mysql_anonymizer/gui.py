@@ -75,8 +75,8 @@ class AnonymizerApp(tk.Tk):
 
         self.config_path = tk.StringVar(value="config.json")
         self.rules_path = tk.StringVar(value="rules.json")
-        self._load_last_paths()
         self.mapping_path = tk.StringVar()
+        self._load_last_paths()
         self.allow_locks = tk.BooleanVar(value=False)
         self.include_dependencies = tk.BooleanVar(value=False)
         self.connection_fields: dict[str, dict[str, tk.StringVar]] = {}
@@ -129,6 +129,9 @@ class AnonymizerApp(tk.Tk):
                 self.config_path.set(config_path)
             if isinstance(rules_path, str) and rules_path:
                 self.rules_path.set(rules_path)
+            mapping_path = state.get("mapping_path")
+            if isinstance(mapping_path, str):
+                self.mapping_path.set(mapping_path)
         except (OSError, json.JSONDecodeError, AttributeError):
             pass
 
@@ -139,6 +142,7 @@ class AnonymizerApp(tk.Tk):
             path.write_text(json.dumps({
                 "config_path": self.config_path.get(),
                 "rules_path": self.rules_path.get(),
+                "mapping_path": self.mapping_path.get(),
             }, indent=2) + "\n", encoding="utf-8")
             try:
                 path.chmod(0o600)
@@ -729,6 +733,7 @@ class AnonymizerApp(tk.Tk):
                 store = open_mapping_store(path)
                 store.close()
                 self.mapping_path.set(path)
+                self._save_last_paths()
                 self._load_lookup_fields()
             except Exception as exc:
                 messagebox.showerror("Could not create mapping store", str(exc))
