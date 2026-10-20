@@ -290,11 +290,26 @@ class AnonymizerApp(tk.Tk):
         ttk.Checkbutton(toolbar, text="Allow source table locks for non-InnoDB", variable=self.allow_locks).pack(side="left", padx=12)
         body = ttk.Frame(self.tables_tab)
         body.pack(fill="both", expand=True)
-        self.table_list = tk.Listbox(body, selectmode="extended", exportselection=False)
-        scrollbar = ttk.Scrollbar(body, orient="vertical", command=self.table_list.yview)
-        self.table_list.configure(yscrollcommand=scrollbar.set)
-        self.table_list.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        self.table_list = ttk.Treeview(
+            body, columns=("status", "table", "records", "size", "eta", "references"),
+            show="headings", selectmode="extended",
+        )
+        for column, heading, width in (
+            ("status", "Destination", 90), ("table", "Table", 190),
+            ("records", "Records", 110), ("size", "Volume", 100),
+            ("eta", "Copy ETA", 110), ("references", "References", 210),
+        ):
+            self.table_list.heading(column, text=heading)
+            self.table_list.column(column, width=width, minwidth=70,
+                                   anchor="w" if column in {"table", "references"} else "center")
+        yscroll = ttk.Scrollbar(body, orient="vertical", command=self.table_list.yview)
+        xscroll = ttk.Scrollbar(body, orient="horizontal", command=self.table_list.xview)
+        self.table_list.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.table_list.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        body.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
         ttk.Label(self.tables_tab, text="✓ marks tables already present in the destination. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
 
     def _build_rules(self) -> None:
@@ -874,7 +889,8 @@ class AnonymizerApp(tk.Tk):
                 "so you will not be able to look up original and anonymized values later. Continue?",
             ):
                 return
-            selected = [self.table_names[i] for i in self.table_list.curselection()]
+            selected = [self.table_list.item(item, "values")[1]
+                        for item in self.table_list.selection()]
             if not selected:
                 messagebox.showinfo("Select tables", "Select at least one table to copy.")
                 return
@@ -1186,22 +1202,24 @@ class AnonymizerApp(tk.Tk):
         self.browse_tree.configure(columns=())
 
     def _render_source_tables(self) -> None:
-        selected_names = {self.table_names[index] for index in self.table_list.curselection()
-                          if index < len(self.table_names)}
-        self.table_list.delete(0, "end")
+        selected_names = {self.table_list.item(item, "values")[1]
+                          for item in self.table_list.selection()}
+        self.table_list.delete(*self.table_list.get_children())
         for index, table in enumerate(self.tables):
             name = table["name"]
-            mark = "✓ " if name in self.copied_table_names else "  "
-            refs = table.get("references", [])
-            suffix = f"  [references: {', '.join(refs)}]" if refs else ""
-            count = f"{table['row_count']:,} rows" if "row_count" in table else "rows —"
+            mark = "✓" if name in self.copied_table_names else ""
+            count = f"{table['row_count']:,}" if "row_count" in table else "—"
             size = self._format_size(table.get("size_bytes"))
             eta = table.get("copy_eta", "—")
-            self.table_list.insert("end", f"{mark}{name}  |  {count}  |  {size}  |  ETA {eta}{suffix}")
+            refs = ", ".join(table.get("references", []))
+            item_id = f"table_{index}"
+            self.table_list.insert("", "end", iid=item_id,
+                                   values=(mark, name, count, size, eta, refs))
             if name in selected_names:
-                self.table_list.select_set(index)
+                self.table_list.selection_add(item_id)
             if name in self.copied_table_names:
-                self.table_list.itemconfig(index, foreground="#16803c")
+                self.table_list.item(item_id, tags=("copied",))
+        self.table_list.tag_configure("copied", foreground="#16803c")
 
     @staticmethod
     def _format_size(size_bytes: int | None) -> str:
@@ -1318,10 +1336,10 @@ class AnonymizerApp(tk.Tk):
         return f"{hours:02}:{minutes:02}:{secs:02}"
 
     def _select_all(self) -> None:
-        self.table_list.select_set(0, "end")
+        self.table_list.selection_set(self.table_list.get_children())
 
     def _clear_selection(self) -> None:
-        self.table_list.selection_clear(0, "end")
+        self.table_list.selection_remove(self.table_list.selection())
 
     def _log(self, message: str) -> None:
         self.output.configure(state="normal")
