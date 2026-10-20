@@ -304,6 +304,22 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.browse_table_box.configure(values=())
         self.browse_column.set("")
         self.browse_column_box.configure(values=("",))
+        self._browse_filter_tables()
+
+    def _browse_filter_tables(self) -> None:
+        role = self.browse_role.get()
+        tables = self.browse_tables_by_role.get(role, [])
+        query = self.browse_table_filter.get().strip().casefold()
+        names = [table["name"] for table in tables if query in table["name"].casefold()]
+        self.browse_table_box.configure(values=names)
+        if self.browse_table.get() not in names:
+            self.browse_table.set(names[0] if names else "")
+            self._clear_browse_rows()
+            if names:
+                self._browse_update_columns()
+            else:
+                self.browse_column.set("")
+                self.browse_column_box.configure(values=("",))
 
     def _browse_table_selected(self, _event=None) -> None:
         self._browse_update_columns()
@@ -1047,10 +1063,9 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 role, tables = value
                 self.browse_tables_by_role[role] = tables
                 names = [table["name"] for table in tables]
-                self.browse_table_box.configure(values=names)
-                self.browse_table.set(names[0] if names else "")
+                self._browse_filter_tables()
                 self._log(f"Loaded {len(names)} {role} table(s) for browsing.")
-                if names:
+                if self.browse_table.get():
                     self._browse_update_columns()
                 else:
                     self._clear_browse_rows()
