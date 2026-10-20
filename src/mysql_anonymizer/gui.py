@@ -1142,7 +1142,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 completed_rows, total_rows, completed_tables, total_tables,
             ))
             return
-        table = progress.get("table", "")
+        table_name = progress.get("table", "")
         table_index = progress.get("table_index", 0)
         table_rows = progress.get("table_rows", 0)
         copied_rows = progress.get("copied_rows", 0)
@@ -1161,13 +1161,13 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             # cells in place and leave ordering to the next explicit sort action.
             for item_id in self.table_list.get_children():
                 try:
-                    table_index = int(item_id.removeprefix("table_"))
-                    table = self.tables[table_index]
+                    source_index = int(item_id.removeprefix("table_"))
+                    view_table = self.tables[source_index]
                 except (ValueError, IndexError):
                     continue
                 values = list(self.table_list.item(item_id, "values"))
                 if len(values) > 4:
-                    values[4] = table.get("copy_eta", "—")
+                    values[4] = view_table.get("copy_eta", "—")
                     self.table_list.item(item_id, values=values)
         if event == "table":
             self.overall_progress.configure(value=max(0, table_index - 1))
@@ -1180,7 +1180,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             self.overall_progress.configure(value=progress.get("completed_tables", table_index))
             self.table_progress.configure(maximum=max(table_rows, 1), value=max(table_rows, 1))
         self.status.set(self._progress_status(
-            f"Copying table {table_index}/{total_tables}",
+            f"Copying table {table_index}/{total_tables}: {table_name}",
             progress.get("completed_rows", 0), total_rows,
             progress.get("completed_tables", table_index - 1), total_tables,
         ))
