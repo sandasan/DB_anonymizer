@@ -441,7 +441,10 @@ class ViewMixin:
         for index, table in enumerate(self.tables):
             name = table["name"]
             mark = "✓" if name in self.copied_table_names else ""
-            count = f"{table['row_count']:,}" if "row_count" in table else "—"
+            row_count = table.get("row_count")
+            count = f"{row_count:,}" if row_count is not None else "—"
+            if count != "—" and table.get("row_count_is_estimate"):
+                count = f"~{count}"
             size = self._format_size(table.get("size_bytes"))
             eta = table.get("copy_eta", "—")
             refs = ", ".join(table.get("references", []))
@@ -459,6 +462,7 @@ class ViewMixin:
         self.table_list.tag_configure("even", background="white")
         self.table_list.tag_configure("odd", background="#f7f9fc")
 
+    @staticmethod
     def _format_size(size_bytes: int | None) -> str:
         if size_bytes is None:
             return "size —"

@@ -340,22 +340,28 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             self.messages.put(("inspect_progress", {"phase": "counts_start", "total": len(tables)}))
             cursor = source.cursor()
             cursor.execute(
-                "SELECT TABLE_NAME, DATA_LENGTH, INDEX_LENGTH "
+                "SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH "
                 "FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'",
                 (config["source"]["database"],),
             )
-            sizes = {name: (data_length or 0) + (index_length or 0)
-                     for name, data_length, index_length in cursor.fetchall()}
+            table_stats = {
+                name: {
+                    "row_count": row_count,
+                    "size_bytes": (data_length or 0) + (index_length or 0),
+                }
+                for name, row_count, data_length, index_length in cursor.fetchall()
+            }
             for index, table in enumerate(tables, start=1):
                 self.messages.put(("inspect_progress", {
-                    "phase": "count_start", "table": table["name"], "index": index,
+                    "phase": "estimate_start", "table": table["name"], "index": index,
                     "total": len(tables),
                 }))
-                cursor.execute(f"SELECT COUNT(*) FROM `{table['name'].replace('`', '``')}`")
-                table["row_count"] = cursor.fetchone()[0]
-                table["size_bytes"] = sizes.get(table["name"], 0)
+                stats = table_stats.get(table["name"], {})
+                table["row_count"] = stats.get("row_count")
+                table["row_count_is_estimate"] = str(table.get("engine") or "").lower() == "innodb"
+                table["size_bytes"] = stats.get("size_bytes", 0)
                 self.messages.put(("inspect_progress", {
-                    "phase": "count_done", "table": table["name"], "index": index,
+                    "phase": "estimate_done", "table": table["name"], "index": index,
                     "total": len(tables),
                 }))
             cursor.close()
@@ -819,20 +825,20 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
             if total:
                 self.table_progress.start(12)
-            self.status.set(f"Counting records in {total} table(s)…")
-        elif phase == "count_start":
+            self.status.set(f"Reading row estimates for {total} table(s)…")
+        elif phase == "estimate_start":
             self.overall_progress.configure(value=max(0, progress["index"] - 1))
             self.table_progress.configure(mode="indeterminate", maximum=1, value=0)
             self.table_progress.start(12)
             self.status.set(
-                f"Counting records in table {progress['index']}/{progress['total']}: {progress['table']}…"
+                f"Reading row estimate for table {progress['index']}/{progress['total']}: {progress['table']}…"
             )
-        elif phase == "count_done":
+        elif phase == "estimate_done":
             self.table_progress.stop()
             self.table_progress.configure(mode="determinate", maximum=1, value=1)
             self.overall_progress.configure(value=progress["index"])
             self.status.set(
-                f"Counted table {progress['index']}/{progress['total']}: {progress['table']}"
+                f"Read row estimate for table {progress['index']}/{progress['total']}: {progress['table']}"
             )
 
     def _reset_inspection_progress(self) -> None:
@@ -842,8 +848,6 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.table_progress.configure(mode="determinate", maximum=1, value=0)
         self.overall_progress_title.set("Overall progress")
         self.table_progress_title.set("Current table")
-
-    @staticmethod
 
     def _show_progress(self, progress: dict[str, Any]) -> None:
         event = progress["event"]
