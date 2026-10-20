@@ -238,6 +238,16 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     try:
         dst.execute("SELECT @@max_allowed_packet")
         max_allowed_packet = int(dst.fetchone()[0])
+        if mapping_db is not None:
+            # Recreated tables must not retain mappings for source rows that were
+            # deleted or rules that no longer apply. Completed tables in a resumed
+            # copy are untouched; the interrupted table is rebuilt from row one.
+            for table in tables:
+                if table["name"] not in completed_names:
+                    mapping_db.execute(
+                        "DELETE FROM mappings WHERE table_name=?", (table["name"],)
+                    )
+            mapping_db.commit()
         if non_transactional:
             # MySQL releases table locks on START TRANSACTION. Disable autocommit first,
             # then hold explicit READ locks across DDL inspection and all row reads.
