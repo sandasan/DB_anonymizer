@@ -62,6 +62,42 @@ def drop_destination_tables(destination, table_names: list[str]) -> None:
             _close_cursor_safely(destination, cursor)
 
 
+def clear_destination_database_data(settings: dict[str, Any], source_settings: dict[str, Any]) -> list[str]:
+    """Drop all base tables in the destination schema without dropping the schema."""
+    database = settings.get("database")
+    if not database:
+        raise ValueError("Destination database is required")
+    source_identity = (
+        str(source_settings.get("host", "localhost")).casefold(),
+        int(source_settings.get("port", 3306)),
+        str(source_settings.get("database", "")).casefold(),
+    )
+    destination_identity = (
+        str(settings.get("host", "localhost")).casefold(),
+        int(settings.get("port", 3306)),
+        str(database).casefold(),
+    )
+    if source_identity == destination_identity:
+        raise ValueError("Refusing to clear the source database")
+
+    connection = connect(settings)
+    try:
+        cursor = connection.cursor()
+        try:
+            cursor.execute(
+                "SELECT TABLE_NAME FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'",
+                (database,),
+            )
+            table_names = [row[0] for row in cursor.fetchall()]
+        finally:
+            cursor.close()
+        drop_destination_tables(connection, table_names)
+        return table_names
+    finally:
+        connection.close()
+
+
 def recreate_destination_database(settings: dict[str, Any], source_settings: dict[str, Any]) -> None:
     """Drop and recreate the configured destination schema using server defaults."""
     database = settings.get("database")

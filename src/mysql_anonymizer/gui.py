@@ -20,6 +20,7 @@ from .gui_settings import SettingsMixin
 from .gui_views import ViewMixin
 from .core import (
     CopyPaused,
+    clear_destination_database_data,
     connect,
     copy_database,
     drop_destination_tables,
@@ -565,6 +566,41 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             return
         self._copy(action="recreate_database")
 
+    def _clear_destination_data(self) -> None:
+        if self.copy_in_progress or self.busy:
+            return
+        destination = self.connection_fields["destination"]["database"].get().strip()
+        if not destination:
+            messagebox.showerror("Destination database required", "Enter the destination database name first.")
+            return
+        typed_name = simpledialog.askstring(
+            "Clear destination data",
+            "This permanently drops every base table in the destination database and discards any saved copy checkpoint. The database itself and its settings remain.\n\n"
+            f"Type the destination database name to continue:\n{destination}",
+            parent=self,
+        )
+        if typed_name != destination:
+            return
+        try:
+            config = self._config()
+        except Exception as exc:
+            messagebox.showerror("Invalid connection settings", str(exc))
+            return
+        try:
+            self._resume_copy_path().unlink(missing_ok=True)
+        except OSError as exc:
+            messagebox.showerror("Could not discard saved copy", str(exc))
+            return
+        self.copy_resume_state = None
+        self.pause_event = None
+        self._run_async("Clearing destination data…", self._clear_destination_worker, config)
+
+    def _clear_destination_worker(self, config: dict[str, Any]) -> None:
+        names = clear_destination_database_data(config["destination"], config["source"])
+        identity = self._destination_identity(config)
+        self._diagnostic("destination_data_cleared", f"table_count={len(names)}")
+        self.messages.put(("destination_data_cleared", (identity, names)))
+
     def _copy(self, action: str = "copy") -> None:
         if self.copy_resume_state is not None:
             messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before starting another one.")
@@ -912,6 +948,17 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 self._table_selected_names.difference_update(copied_names)
                 self._render_source_tables()
                 self._save_last_paths()
+            elif kind == "destination_data_cleared":
+                identity, names = value
+                self.copied_table_names.clear()
+                identity_key = self._destination_identity_key(identity)
+                self.recreated_tables_by_destination.pop(identity_key, None)
+                if self.recreated_destination_identity == identity:
+                    self.recreated_table_names.clear()
+                self._render_source_tables()
+                self._save_last_paths()
+                self.messages.put(("log", f"Cleared {len(names)} destination table(s) and reset copy state."))
+                self.messages.put(("operation_status", "Destination data cleared; copy state reset."))
             elif kind == "log":
                 self._log(value)
             elif kind == "operation_status":
@@ -1012,7 +1059,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         for widget in (self.save_config_button, self.inspect_button, self.test_connections_button,
                        self.copy_button, self.browse_tables_button, self.browse_search_button,
                        self.lookup_fields_button, self.recreate_tables_button,
-                       self.recreate_database_button):
+                       self.recreate_database_button, self.clear_destination_button):
             widget.configure(state=state)
         self.copy_button.configure(state="disabled" if self.copy_resume_state is not None else state)
         if self.busy:

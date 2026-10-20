@@ -149,6 +149,10 @@ class ViewMixin:
             toolbar, text="Recreate destination DB", command=self._recreate_destination_database
         )
         self.recreate_database_button.pack(side="right")
+        self.clear_destination_button = ttk.Button(
+            toolbar, text="Clear destination data", command=self._clear_destination_data
+        )
+        self.clear_destination_button.pack(side="right", padx=(0, 8))
         ttk.Checkbutton(toolbar, text="Include referenced tables automatically", variable=self.include_dependencies).pack(side="left", padx=12)
         ttk.Checkbutton(toolbar, text="Allow source table locks for non-InnoDB", variable=self.allow_locks).pack(side="left", padx=12)
         filter_bar = ttk.Frame(self.tables_tab)
