@@ -6,6 +6,8 @@ build/
 dist/
 config.json
 rules.json
+config_*.json
+rules_*.json
 *.sqlite
 *.sqlite3
 *.db
