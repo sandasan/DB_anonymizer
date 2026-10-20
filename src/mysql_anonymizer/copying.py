@@ -158,6 +158,17 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     dst_check.close()
     selected_names = set(resolve_table_selection(
         all_tables, selected_tables, include_dependencies, existing_destination_tables))
+    # A table may still be selected in the UI after an earlier copy. If another
+    # selected table references it, reuse the destination copy instead of treating
+    # it as a collision or trying to copy it again.
+    referenced_existing = {
+        dependency
+        for table in all_tables
+        if table["name"] in selected_names
+        for dependency in table.get("references", [])
+        if dependency in existing_destination_tables
+    }
+    selected_names.difference_update(referenced_existing)
     tables = [table for table in all_tables if table["name"] in selected_names]
     table_positions = {table["name"]: index for index, table in enumerate(tables, start=1)}
     completed_counts = dict(completed_counts or {})
