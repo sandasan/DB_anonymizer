@@ -159,6 +159,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     selected_names = set(resolve_table_selection(
         all_tables, selected_tables, include_dependencies, existing_destination_tables))
     tables = [table for table in all_tables if table["name"] in selected_names]
+    table_positions = {table["name"]: index for index, table in enumerate(tables, start=1)}
     completed_counts = dict(completed_counts or {})
     completed_names = set(completed_counts)
     missing_completed = sorted(completed_names - existing_destination_tables)
@@ -218,7 +219,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 destination.commit()
             if progress_callback:
                 progress_callback({"event": "table", "table": name,
-                                   "table_index": tables.index(t) + 1, "total_tables": len(tables),
+                                   "table_index": table_positions[name], "total_tables": len(tables),
                                    "table_rows": row_totals[name], "copied_rows": 0,
                                    "total_rows": total_rows, "completed_rows": sum(counts.values())})
             cols = [c for c in t["columns"] if "GENERATED" not in c["EXTRA"].upper()]
@@ -227,6 +228,14 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             src.execute(f"SELECT {qcols} FROM {qname(schema, name)}")
             transforms = rules.get("tables", {}).get(name, {}).get("anonymize", {})
             column_info = {c["COLUMN_NAME"]: c for c in cols}
+            transform_columns = [
+                (names.index(col), col, rule)
+                for col, rule in transforms.items()
+            ]
+            set_indexes = [
+                index for index, col in enumerate(names)
+                if column_info[col]["DATA_TYPE"].lower() == "set"
+            ]
             unique_state = {
                 col: ({}, set())
                 for col in transforms
@@ -236,27 +245,25 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             count = 0
             while rows := src.fetchmany(batch_size):
                 output = []
+                mapping_rows = []
                 for row in rows:
                     values = list(row)
-                    for i, col in enumerate(names):
-                        if column_info[col]["DATA_TYPE"].lower() == "set" and isinstance(values[i], set):
+                    for index in set_indexes:
+                        if isinstance(values[index], set):
                             # mysql-connector-python decodes MySQL SET fields as Python sets,
                             # while INSERT parameters require MySQL's comma-separated form.
-                            values[i] = ",".join(sorted(values[i]))
-                        if col in transforms:
-                            original_value = values[i]
-                            new_value = transform(original_value, transforms[col], name, col)
-                            if col in unique_state and new_value is not None:
-                                mapping, used = unique_state[col]
-                                new_value = unique_text(values[i], new_value, name, col,
-                                                        text_column_length(column_info[col]["COLUMN_TYPE"]),
-                                                        mapping, used)
-                            values[i] = new_value
-                            if mapping_db is not None and original_value is not None and new_value is not None:
-                                mapping_db.execute(
-                                    "INSERT OR REPLACE INTO mappings VALUES (?, ?, ?, ?)",
-                                    (name, col, str(original_value), str(new_value)),
-                                )
+                            values[index] = ",".join(sorted(values[index]))
+                    for index, col, rule in transform_columns:
+                        original_value = values[index]
+                        new_value = transform(original_value, rule, name, col)
+                        if col in unique_state and new_value is not None:
+                            mapping, used = unique_state[col]
+                            new_value = unique_text(values[index], new_value, name, col,
+                                                    text_column_length(column_info[col]["COLUMN_TYPE"]),
+                                                    mapping, used)
+                        values[index] = new_value
+                        if mapping_db is not None and original_value is not None and new_value is not None:
+                            mapping_rows.append((name, col, str(original_value), str(new_value)))
                     output.append(tuple(values))
                 try:
                     dst.executemany(insert, output)
@@ -291,10 +298,14 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 # continue from a durable checkpoint.
                 destination.commit()
                 if mapping_db is not None:
+                    if mapping_rows:
+                        mapping_db.executemany(
+                            "INSERT OR REPLACE INTO mappings VALUES (?, ?, ?, ?)", mapping_rows
+                        )
                     mapping_db.commit()
                 if progress_callback:
                     progress_callback({"event": "batch", "table": name,
-                                       "table_index": tables.index(t) + 1, "total_tables": len(tables),
+                                       "table_index": table_positions[name], "total_tables": len(tables),
                                        "table_rows": row_totals[name], "copied_rows": count,
                                        "total_rows": total_rows,
                                        "completed_rows": sum(counts.values()) + count})
@@ -306,7 +317,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 mapping_db.commit()
             if progress_callback:
                 progress_callback({"event": "table_done", "table": name,
-                                   "table_index": len(counts), "total_tables": len(tables),
+                                   "table_index": table_positions[name], "total_tables": len(tables),
                                    "table_rows": row_totals[name], "copied_rows": count,
                                    "total_rows": total_rows,
                                    "completed_rows": sum(counts.values()),
