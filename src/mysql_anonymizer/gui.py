@@ -767,6 +767,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     )
             elif kind == "copied_tables":
                 self.copied_table_names.update(value)
+                self._table_selected_names.difference_update(value)
                 self._render_source_tables()
             elif kind == "log":
                 self._log(value)
