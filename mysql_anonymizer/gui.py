@@ -58,8 +58,9 @@ class AnonymizerApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("MySQL Anonymized Copy")
-        self.geometry("980x760")
-        self.minsize(800, 620)
+        self.geometry("1120x820")
+        self.minsize(900, 680)
+        self._configure_style()
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
         self.copied_table_names: set[str] = set()
@@ -84,6 +85,30 @@ class AnonymizerApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll_messages)
         self.after(250, self._offer_resume_copy)
+
+    def _configure_style(self) -> None:
+        style = ttk.Style(self)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        self.configure(background="#f3f5f8")
+        style.configure("TFrame", background="#f3f5f8")
+        style.configure("TLabel", background="#f3f5f8", foreground="#253247", font=("TkDefaultFont", 10))
+        style.configure("Heading.TLabel", font=("TkDefaultFont", 11, "bold"), foreground="#152238")
+        style.configure("TLabelframe", background="#f3f5f8", bordercolor="#d6dde7", relief="solid")
+        style.configure("TLabelframe.Label", background="#f3f5f8", foreground="#34445c", font=("TkDefaultFont", 10, "bold"))
+        style.configure("TButton", padding=(13, 8), font=("TkDefaultFont", 9))
+        style.map("TButton", foreground=[("disabled", "#8a94a3")])
+        style.configure("Accent.TButton", background="#2563eb", foreground="white", padding=(16, 9), font=("TkDefaultFont", 9, "bold"))
+        style.map("Accent.TButton", background=[("active", "#1d4ed8"), ("disabled", "#a8b8d6")], foreground=[("disabled", "#eef2f8")])
+        style.configure("TEntry", padding=6, fieldbackground="white")
+        style.configure("TCombobox", padding=5, fieldbackground="white")
+        style.configure("TNotebook", background="#f3f5f8", borderwidth=0)
+        style.configure("TNotebook.Tab", padding=(15, 9), font=("TkDefaultFont", 9, "bold"))
+        style.map("TNotebook.Tab", background=[("selected", "white"), ("!selected", "#e7ebf1")], foreground=[("selected", "#1d4ed8"), ("!selected", "#536176")])
+        style.configure("Treeview", background="white", fieldbackground="white", foreground="#29364a", rowheight=29, bordercolor="#dce2eb", borderwidth=1, font=("TkDefaultFont", 9))
+        style.configure("Treeview.Heading", background="#e9eef5", foreground="#36445a", relief="flat", padding=(8, 8), font=("TkDefaultFont", 9, "bold"))
+        style.map("Treeview", background=[("selected", "#dbeafe")], foreground=[("selected", "#173b78")])
+        style.configure("Horizontal.TProgressbar", thickness=9, troughcolor="#e0e6ef", background="#3975e8")
 
     @staticmethod
     def _state_file() -> Path:
@@ -193,27 +218,27 @@ class AnonymizerApp(tk.Tk):
 
         actions = ttk.Frame(self, padding=(12, 4, 12, 4))
         actions.pack(fill="x")
-        self.save_config_button = ttk.Button(actions, text="Save config", command=self._save_config)
+        self.save_config_button = ttk.Button(actions, text="Save config", command=self._save_config, width=14)
         self.save_config_button.pack(side="left")
-        self.inspect_button = ttk.Button(actions, text="Inspect source", command=self._inspect)
+        self.inspect_button = ttk.Button(actions, text="Inspect source", command=self._inspect, width=16)
         self.inspect_button.pack(side="left", padx=8)
-        self.test_connections_button = ttk.Button(actions, text="Test connections", command=self._test_connections)
+        self.test_connections_button = ttk.Button(actions, text="Test connections", command=self._test_connections, width=17)
         self.test_connections_button.pack(side="left")
-        self.copy_button = ttk.Button(actions, text="Copy selected tables", command=self._copy)
+        self.copy_button = ttk.Button(actions, text="Copy selected tables", command=self._copy, style="Accent.TButton", width=22)
         self.copy_button.pack(side="right")
-        self.pause_button = ttk.Button(actions, text="Pause copy", command=self._request_pause, state="disabled")
+        self.pause_button = ttk.Button(actions, text="Pause copy", command=self._request_pause, state="disabled", width=14)
         self.pause_button.pack(side="right", padx=(0, 8))
 
         progress_panel = ttk.Frame(self, padding=(12, 0, 12, 4))
         progress_panel.pack(fill="x")
-        ttk.Label(progress_panel, text="Overall copy progress").pack(anchor="w")
+        ttk.Label(progress_panel, text="Overall copy progress", style="Heading.TLabel").pack(anchor="w")
         self.overall_progress = ttk.Progressbar(progress_panel, mode="determinate", maximum=1, value=0)
         self.overall_progress.pack(fill="x", pady=(0, 3))
-        ttk.Label(progress_panel, text="Current table").pack(anchor="w")
+        ttk.Label(progress_panel, text="Current table", style="Heading.TLabel").pack(anchor="w")
         self.table_progress = ttk.Progressbar(progress_panel, mode="determinate", maximum=1, value=0)
         self.table_progress.pack(fill="x", pady=(0, 4))
         self.status = tk.StringVar(value="Load or enter connection settings, then inspect the source.")
-        ttk.Label(progress_panel, textvariable=self.status).pack(anchor="w")
+        ttk.Label(progress_panel, textvariable=self.status, foreground="#52637a").pack(anchor="w", pady=(2, 0))
 
         self.tabs_widget = ttk.Notebook(self)
         self.tabs_widget.pack(fill="both", expand=True, padx=12, pady=8)
@@ -236,6 +261,8 @@ class AnonymizerApp(tk.Tk):
         footer = ttk.Frame(self, padding=(12, 4, 12, 8))
         footer.pack(fill="x")
         self.output = tk.Text(footer, height=4, wrap="word", state="disabled")
+        self.output.configure(background="#fbfcfe", foreground="#435168", relief="flat", padx=9, pady=7,
+                              font=("TkFixedFont", 9), highlightthickness=1, highlightbackground="#dce2eb")
         self.output.pack(fill="x")
 
     def _config_path_row(self, parent: ttk.Frame, row: int) -> None:
@@ -1219,7 +1246,12 @@ class AnonymizerApp(tk.Tk):
                 self.table_list.selection_add(item_id)
             if name in self.copied_table_names:
                 self.table_list.item(item_id, tags=("copied",))
-        self.table_list.tag_configure("copied", foreground="#16803c")
+        self.table_list.tag_configure("copied", foreground="#167246", background="#f0faf4")
+        for index, item_id in enumerate(self.table_list.get_children()):
+            if not self.table_list.item(item_id, "tags"):
+                self.table_list.item(item_id, tags=("even" if index % 2 == 0 else "odd",))
+        self.table_list.tag_configure("even", background="white")
+        self.table_list.tag_configure("odd", background="#f7f9fc")
 
     @staticmethod
     def _format_size(size_bytes: int | None) -> str:
