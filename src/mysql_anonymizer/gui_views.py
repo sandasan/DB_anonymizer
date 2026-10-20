@@ -275,8 +275,35 @@ class ViewMixin:
         self.rules_preview.pack(side="left", fill="both", expand=True)
         preview_scroll.pack(side="right", fill="y")
         self.rules_preview.bind("<Double-1>", self._rules_preview_navigate)
+        self.rules_preview.bind("<<TreeviewSelect>>", self._rules_editor_load_selection)
         self.rules_preview_status = tk.StringVar(value="Inspect the source to compare rules with its columns.")
         ttk.Label(self.rules_tab, textvariable=self.rules_preview_status).pack(anchor="w", pady=(0, 4))
+        editor = ttk.LabelFrame(self.rules_tab, text="Edit selected column", padding=8)
+        editor.pack(fill="x", pady=(0, 8))
+        self.rules_edit_selection = tk.StringVar(value="Select a column above")
+        ttk.Label(editor, textvariable=self.rules_edit_selection, width=28).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(editor, text="Mode").grid(row=0, column=1, sticky="e")
+        self.rules_edit_mode = tk.StringVar(value="Unconfigured")
+        ttk.Combobox(editor, textvariable=self.rules_edit_mode, state="readonly", width=15,
+                     values=("Unconfigured", "Preserve", "Anonymize")).grid(row=0, column=2, padx=4)
+        self.rules_edit_mode.trace_add("write", lambda *_args: self._rules_editor_mode_changed())
+        self.rules_edit_type = tk.StringVar(value="email")
+        ttk.Label(editor, text="Transform").grid(row=0, column=3, sticky="e")
+        self.rules_edit_type_box = ttk.Combobox(
+            editor, textvariable=self.rules_edit_type, state="readonly", width=14,
+            values=("email", "phone", "name", "address", "date_shift", "constant", "unique"),
+        )
+        self.rules_edit_type_box.grid(row=0, column=4, padx=4)
+        self.rules_edit_type_box.bind("<<ComboboxSelected>>", lambda _event: self._rules_editor_type_changed())
+        self.rules_edit_constant = tk.StringVar()
+        ttk.Label(editor, text="Constant").grid(row=0, column=5, sticky="e", padx=(4, 0))
+        self.rules_edit_constant_entry = ttk.Entry(editor, textvariable=self.rules_edit_constant, width=24)
+        self.rules_edit_constant_entry.grid(row=0, column=6, padx=4)
+        ttk.Button(editor, text="Apply", command=self._rules_editor_apply).grid(row=0, column=7, padx=(8, 4))
+        ttk.Button(editor, text="Remove rule", command=self._rules_editor_remove).grid(row=0, column=8, padx=4)
+        self.rules_edit_status = tk.StringVar(value="Choose a rule mode and apply it to the selected column.")
+        ttk.Label(editor, textvariable=self.rules_edit_status).grid(row=1, column=0, columnspan=9, sticky="w", pady=(6, 0))
+        self._rules_editor_mode_changed()
         self.rules_editor = tk.Text(self.rules_tab, wrap="none", undo=True)
         self.rules_editor.pack(fill="both", expand=True)
         self.rules_editor.bind("<KeyRelease>", lambda _event: self._schedule_rules_preview())
@@ -376,6 +403,95 @@ class ViewMixin:
         for row in filtered:
             self.rules_preview.insert("", "end", values=row)
         self.rules_preview_status.set(f"Showing {len(filtered)} of {len(rows)} source and configured columns. Double-click a row to jump to its rule.")
+
+    def _rules_editor_mode_changed(self) -> None:
+        if not hasattr(self, "rules_edit_type_box"):
+            return
+        anonymizing = self.rules_edit_mode.get() == "Anonymize"
+        self.rules_edit_type_box.configure(state="readonly" if anonymizing else "disabled")
+        self.rules_edit_constant_entry.configure(state="normal" if anonymizing and self.rules_edit_type.get() == "constant" else "disabled")
+
+    def _rules_editor_type_changed(self) -> None:
+        self._rules_editor_mode_changed()
+
+    def _rules_editor_load_selection(self, _event=None) -> None:
+        selected = self.rules_preview.selection()
+        if not selected:
+            return
+        table_name, column_name, _status = self.rules_preview.item(selected[0], "values")
+        self.rules_edit_selection.set(f"{table_name}.{column_name}")
+        try:
+            rules = json.loads(self.rules_editor.get("1.0", "end-1c") or "{}")
+            config = rules.get("tables", {}).get(table_name, {})
+            preserved = column_name in config.get("preserve", [])
+            transform = config.get("anonymize", {}).get(column_name)
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            self.rules_edit_status.set("Fix the JSON before editing a rule.")
+            return
+        if isinstance(transform, dict):
+            self.rules_edit_mode.set("Anonymize")
+            self.rules_edit_type.set(transform.get("type", "email"))
+            value = transform.get("value", "")
+            self.rules_edit_constant.set(json.dumps(value, ensure_ascii=False) if "value" in transform else "")
+            self.rules_edit_status.set("Current rule loaded. Apply to save changes to the JSON editor.")
+        elif preserved:
+            self.rules_edit_mode.set("Preserve")
+            self.rules_edit_constant.set("")
+            self.rules_edit_status.set("Column is preserved.")
+        else:
+            self.rules_edit_mode.set("Unconfigured")
+            self.rules_edit_constant.set("")
+            self.rules_edit_status.set("No rule is configured for this column.")
+
+    def _rules_editor_apply(self) -> None:
+        selected = self.rules_preview.selection()
+        if not selected:
+            self.rules_edit_status.set("Select a column in the list first.")
+            return
+        table_name, column_name, _status = self.rules_preview.item(selected[0], "values")
+        try:
+            rules = json.loads(self.rules_editor.get("1.0", "end-1c") or "{}")
+            if not isinstance(rules, dict):
+                raise ValueError("Rules must be a JSON object")
+            table_rules = rules.setdefault("tables", {})
+            if not isinstance(table_rules, dict):
+                raise ValueError("The 'tables' rules entry must be an object")
+            config = table_rules.setdefault(table_name, {})
+            if not isinstance(config, dict):
+                raise ValueError(f"Rules for table {table_name!r} must be an object")
+            preserve = config.setdefault("preserve", [])
+            anonymize = config.setdefault("anonymize", {})
+            if not isinstance(preserve, list) or not isinstance(anonymize, dict):
+                raise ValueError("The table's 'preserve' value must be a list and 'anonymize' value an object")
+            config["preserve"] = [item for item in preserve if item != column_name]
+            anonymize.pop(column_name, None)
+            mode = self.rules_edit_mode.get()
+            if mode == "Preserve":
+                config["preserve"] = sorted(set(config["preserve"]) | {column_name})
+            elif mode == "Anonymize":
+                kind = self.rules_edit_type.get()
+                transform = {"type": kind}
+                if kind == "constant":
+                    raw_value = self.rules_edit_constant.get()
+                    try:
+                        transform["value"] = json.loads(raw_value)
+                    except json.JSONDecodeError:
+                        transform["value"] = raw_value
+                anonymize[column_name] = transform
+            self._set_rules_text(json.dumps(rules, indent=2, ensure_ascii=False))
+            match = next((iid for iid in self.rules_preview.get_children()
+                          if self.rules_preview.item(iid, "values")[:2] == (table_name, column_name)), None)
+            if match is not None:
+                self.rules_preview.selection_set(match)
+                self.rules_preview.focus(match)
+            self._rules_editor_load_selection()
+            self.rules_edit_status.set(f"Updated {table_name}.{column_name} in the rules editor.")
+        except (json.JSONDecodeError, ValueError) as exc:
+            self.rules_edit_status.set(str(exc))
+
+    def _rules_editor_remove(self) -> None:
+        self.rules_edit_mode.set("Unconfigured")
+        self._rules_editor_apply()
 
     def _schedule_rules_preview(self) -> None:
         if self.rules_preview_after_id is not None:
