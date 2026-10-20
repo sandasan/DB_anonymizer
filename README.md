@@ -57,6 +57,8 @@ SHOW GRANTS FOR 'anonymizer_writer'@'localhost';
 
 Set `destination.user`, `destination.database`, and `MYSQL_DESTINATION_PASSWORD` in the CLI configuration/environment to match this account. The account host must match where the CLI connects from, just as for the source user. If the account already exists but its password is wrong, update it as an administrator with `ALTER USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';`. If the schema name, username, host, and password all match but access is denied, check the server's account host matching and grants with `SHOW GRANTS`.
 
+In the GUI, **Recreate selected tables** drops the selected destination tables and recopies them; this requires `DROP` on those tables. **Recreate destination DB** drops and recreates the configured destination schema, then copies all source tables; this requires database-level `DROP` and `CREATE` privileges. The normal writer account above intentionally lacks these privileges. Use a dedicated maintenance account for these actions, and never grant them on the source database.
+
 ### Use a MariaDB server in Docker
 
 The CLI can connect from the host to a MariaDB container through a published port, or from another container on the same Docker network. MariaDB is generally compatible with MySQL clients, but this project currently uses MySQL Connector/Python and has not been specifically verified against every MariaDB version. Start by running `inspect` to verify the connection and schema queries.

@@ -1,7 +1,7 @@
 """Compatibility exports for the anonymizer application services."""
 
 from .config import connect, load_json, save_json_atomic
-from .copying import CopyPaused, copy_database
+from .copying import CopyPaused, copy_database, drop_destination_tables, recreate_destination_database
 from .mappings import list_mapping_fields, lookup_mapping, open_mapping_store
 from .rules import init_rules, migrate_identifier_rules, prune_rules_to_schema, validate_rules
 from .schema import inspect_schema, qname, resolve_table_selection
@@ -18,6 +18,7 @@ __all__ = [
     "TEXT_DATA_TYPES",
     "connect",
     "copy_database",
+    "drop_destination_tables",
     "init_rules",
     "inspect_schema",
     "list_mapping_fields",
@@ -28,6 +29,7 @@ __all__ = [
     "prune_rules_to_schema",
     "qname",
     "resolve_table_selection",
+    "recreate_destination_database",
     "save_json_atomic",
     "stable_number",
     "text_column_length",

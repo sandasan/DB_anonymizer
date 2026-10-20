@@ -9,7 +9,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from typing import Any
 
 from .cli import check_config
@@ -19,11 +19,15 @@ from .core import (
     CopyPaused,
     connect,
     copy_database,
+    drop_destination_tables,
     inspect_schema,
+    list_mapping_fields,
     load_json,
     lookup_mapping,
     migrate_identifier_rules,
     prune_rules_to_schema,
+    recreate_destination_database,
+    resolve_table_selection,
     save_json_atomic,
 )
 
@@ -75,6 +79,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         self.inspection_stale = False
         self.copy_schema_verified = False
         self.copy_after_schema_check = False
+        self.pending_copy_action: str | None = None
         self.close_when_paused = False
         self.copy_resume_state: dict[str, Any] | None = None
 
@@ -416,7 +421,46 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         )
         self.messages.put(("copy_schema_check", unchanged))
 
-    def _copy(self) -> None:
+    def _recreate_selected_tables(self) -> None:
+        if self.copy_resume_state is not None:
+            messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before recreating tables.")
+            return
+        selected = [self.table_list.item(item, "values")[1] for item in self.table_list.selection()]
+        if not selected:
+            messagebox.showinfo("Select tables", "Select the source tables to recreate in the destination.")
+            return
+        destination = self.connection_fields["destination"]["database"].get().strip()
+        names = "\n".join(f"  {name}" for name in selected)
+        if not messagebox.askyesno(
+            "Recreate destination tables",
+            f"This will permanently drop these destination tables, then recreate and recopy them from the source:\n\n"
+            f"{names}\n\nDestination database: {destination}\n\nContinue?",
+        ):
+            return
+        self._copy(action="replace_tables")
+
+    def _recreate_destination_database(self) -> None:
+        if self.copy_resume_state is not None:
+            messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before recreating the database.")
+            return
+        if not self.tables:
+            messagebox.showinfo("Inspect source first", "Inspect the source before recreating the destination database.")
+            return
+        destination = self.connection_fields["destination"]["database"].get().strip()
+        if not destination:
+            messagebox.showerror("Destination database required", "Enter the destination database name first.")
+            return
+        typed_name = simpledialog.askstring(
+            "Recreate destination database",
+            f"This permanently deletes the entire destination database and all its contents, then recreates it and copies all source tables.\n\n"
+            f"Type the destination database name to continue:\n{destination}",
+            parent=self,
+        )
+        if typed_name != destination:
+            return
+        self._copy(action="recreate_database")
+
+    def _copy(self, action: str = "copy") -> None:
         if self.copy_resume_state is not None:
             messagebox.showinfo("Resume existing copy", "Resume or finish the saved copy before starting another one.")
             return
@@ -436,6 +480,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 messagebox.showerror("Invalid connection settings", str(exc))
                 return
             self.copy_after_schema_check = True
+            self.pending_copy_action = action
             self.overall_progress_title.set("Checking source schema")
             self.table_progress_title.set("Checking source schema")
             self.overall_progress.configure(mode="indeterminate", maximum=1, value=0)
@@ -446,7 +491,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                             config, self.inspection_snapshot)
             return
         self.copy_schema_verified = False
-        if not messagebox.askyesno("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules."):
+        if action == "copy" and not messagebox.askyesno("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules."):
             return
         try:
             raw = self.rules_editor.get("1.0", "end-1c").strip()
@@ -464,6 +509,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 return
             selected = [self.table_list.item(item, "values")[1]
                         for item in self.table_list.selection()]
+            if action == "recreate_database":
+                selected = [table["name"] for table in self.tables]
             if not selected:
                 messagebox.showinfo("Select tables", "Select at least one table to copy.")
                 return
@@ -488,7 +535,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     return
             rules_path = None if stale_rules else self.rules_path.get()
             allow_locks = self.allow_locks.get()
-            include_dependencies = self.include_dependencies.get()
+            include_dependencies = self.include_dependencies.get() or action == "recreate_database"
             state = {
                 "version": 1,
                 "config": config,
@@ -499,6 +546,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 "allow_locks": allow_locks,
                 "include_dependencies": include_dependencies,
                 "completed_counts": {},
+                "recreate_action": action,
             }
             self._save_copy_checkpoint(state)
             self.copy_resume_state = state
@@ -509,6 +557,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                             mapping_path, rules_path, allow_locks, include_dependencies,
                             state, self.pause_event)
         except Exception as exc:
+            self.pending_copy_action = None
             messagebox.showerror("Could not start copy", str(exc))
 
     def _confirm_stale_rules(self, details: str) -> bool:
@@ -592,7 +641,24 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 save_json_atomic(rules_path, rules)
             if moved:
                 self.messages.put(("log", "Moved identifier columns to preserve: " + ", ".join(moved)))
+            action = resume_state.get("recreate_action", "copy")
+            if action == "recreate_database" and not resume_state.get("is_resume"):
+                recreate_destination_database(config["destination"], config["source"])
             destination = connect_with_guidance("destination", config["destination"])
+            if action == "replace_tables" and not resume_state.get("is_resume"):
+                check = destination.cursor()
+                try:
+                    check.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()")
+                    existing_tables = {row[0] for row in check.fetchall()}
+                finally:
+                    check.close()
+                resolve_table_selection(
+                    tables,
+                    selected,
+                    include_dependencies,
+                    existing_tables - set(selected),
+                )
+                drop_destination_tables(destination, selected)
             self.messages.put(("progress", {"event": "copy_started"}))
 
             def report_progress(progress: dict[str, Any]) -> None:
@@ -774,6 +840,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 if self.inspection_in_progress:
                     self._reset_inspection_progress()
                     self.inspection_in_progress = False
+                self.pending_copy_action = None
                 self.copy_started_at = None
                 self._log("Error: " + value)
                 messagebox.showerror("Operation failed", value)
@@ -786,7 +853,9 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 if kind == "done" and self.copy_after_schema_check:
                     self.copy_after_schema_check = False
                     if self.copy_schema_verified:
-                        self.after_idle(self._copy)
+                        action = self.pending_copy_action or "copy"
+                        self.pending_copy_action = None
+                        self.after_idle(lambda: self._copy(action))
                 if kind == "done" and self.close_when_paused and not self.copy_in_progress:
                     self.after_idle(self._on_close)
                     return
@@ -796,7 +865,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         state = "disabled" if busy else "normal"
         for widget in (self.save_config_button, self.inspect_button, self.test_connections_button,
                        self.copy_button, self.browse_tables_button, self.browse_search_button,
-                       self.lookup_fields_button):
+                       self.lookup_fields_button, self.recreate_tables_button,
+                       self.recreate_database_button):
             widget.configure(state=state)
         self.copy_button.configure(state="disabled" if self.copy_resume_state is not None else state)
         if self.busy:

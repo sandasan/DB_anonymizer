@@ -135,6 +135,14 @@ class ViewMixin:
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Select all", command=self._select_all).pack(side="left")
         ttk.Button(toolbar, text="Clear selection", command=self._clear_selection).pack(side="left", padx=8)
+        self.recreate_tables_button = ttk.Button(
+            toolbar, text="Recreate selected tables", command=self._recreate_selected_tables
+        )
+        self.recreate_tables_button.pack(side="right", padx=(8, 0))
+        self.recreate_database_button = ttk.Button(
+            toolbar, text="Recreate destination DB", command=self._recreate_destination_database
+        )
+        self.recreate_database_button.pack(side="right")
         ttk.Checkbutton(toolbar, text="Include referenced tables automatically", variable=self.include_dependencies).pack(side="left", padx=12)
         ttk.Checkbutton(toolbar, text="Allow source table locks for non-InnoDB", variable=self.allow_locks).pack(side="left", padx=12)
         body = ttk.Frame(self.tables_tab)

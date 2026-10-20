@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 import mysql.connector
 
+from .config import connect
 from .mappings import open_mapping_store
 from .rules import validate_rules
 from .schema import inspect_schema, qname, resolve_table_selection
@@ -20,6 +21,70 @@ class CopyPaused(Exception):
         self.completed_counts = dict(completed_counts)
         self.current_table = current_table
         self.selected_tables = list(selected_tables)
+
+
+def _quote_identifier(identifier: str) -> str:
+    return f"`{identifier.replace('`', '``')}`"
+
+
+def drop_destination_tables(destination, table_names: list[str]) -> None:
+    """Drop selected destination tables before recreating them from source."""
+    cursor = destination.cursor()
+    try:
+        cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+        if table_names:
+            quoted_tables = ", ".join(_quote_identifier(table) for table in table_names)
+            cursor.execute(f"DROP TABLE IF EXISTS {quoted_tables}")
+    finally:
+        try:
+            cursor.execute("SET FOREIGN_KEY_CHECKS=1")
+        finally:
+            cursor.close()
+
+
+def recreate_destination_database(settings: dict[str, Any], source_settings: dict[str, Any]) -> None:
+    """Drop and recreate the configured destination schema using server defaults."""
+    database = settings.get("database")
+    if not database:
+        raise ValueError("Destination database is required")
+    source_identity = (
+        str(source_settings.get("host", "localhost")).lower(),
+        int(source_settings.get("port", 3306)),
+        str(source_settings.get("database", "")).casefold(),
+    )
+    destination_identity = (
+        str(settings.get("host", "localhost")).lower(),
+        int(settings.get("port", 3306)),
+        str(database).casefold(),
+    )
+    if source_identity == destination_identity:
+        raise ValueError("Refusing to drop the source database")
+
+    admin_settings = dict(settings)
+    admin_settings.pop("database", None)
+    connection = connect(admin_settings)
+    cursor = connection.cursor()
+    quoted_database = _quote_identifier(database)
+    try:
+        # Check CREATE permission before dropping anything. IF NOT EXISTS is a no-op
+        # for an existing schema but still validates that the account may create it.
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS {quoted_database}")
+        cursor.execute(
+            "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME "
+            "FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=%s",
+            (database,),
+        )
+        existing = cursor.fetchone()
+        cursor.execute(f"DROP DATABASE IF EXISTS {quoted_database}")
+        create_sql = f"CREATE DATABASE {quoted_database}"
+        if existing:
+            character_set, collation = existing
+            create_sql += f" CHARACTER SET {_quote_identifier(character_set)} COLLATE {_quote_identifier(collation)}"
+        cursor.execute(create_sql)
+        connection.commit()
+    finally:
+        cursor.close()
+        connection.close()
 
 
 def copy_database(source, destination, schema: str, rules: dict[str, Any], batch_size: int = 500,
