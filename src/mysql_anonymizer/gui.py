@@ -1137,7 +1137,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             self.overall_progress.configure(maximum=max(total_tables, 1), value=completed_tables)
             self.table_progress.configure(maximum=1, value=0)
             self.status.set(self._progress_status(
-                f"Preparing {total_tables} table(s), {total_rows} row(s)",
+                f"Preparing copy · {total_tables} table(s)",
                 completed_rows, total_rows, completed_tables, total_tables,
             ))
             return
@@ -1179,8 +1179,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             self.overall_progress.configure(value=progress.get("completed_tables", table_index))
             self.table_progress.configure(maximum=max(table_rows, 1), value=max(table_rows, 1))
         self.status.set(self._progress_status(
-            f"Copying table {table_index}/{total_tables}: {table} "
-            f"({copied_rows}/{table_rows} rows; {progress.get('completed_rows', 0)}/{total_rows} total)",
+            f"Copying table {table_index}/{total_tables}",
             progress.get("completed_rows", 0), total_rows,
             progress.get("completed_tables", table_index - 1), total_tables,
         ))
