@@ -414,34 +414,54 @@ class ViewMixin:
 
     def _build_lookup(self) -> None:
         self.lookup_table = tk.StringVar()
+        self.lookup_table_filter = tk.StringVar()
         self.lookup_column = tk.StringVar()
+        self.lookup_column_filter = tk.StringVar()
         self.lookup_value = tk.StringVar()
         self.lookup_direction = tk.StringVar(value="original-to-anonymized")
         self.lookup_fields_by_table: dict[str, list[str]] = {}
         form = ttk.Frame(self.lookup_tab)
         form.pack(anchor="nw", fill="x")
-        ttk.Label(form, text="Table", width=18).grid(row=0, column=0, sticky="w", pady=6)
+        ttk.Label(form, text="Filter tables", width=18).grid(row=0, column=0, sticky="w", pady=6)
+        ttk.Entry(form, textvariable=self.lookup_table_filter).grid(row=0, column=1, sticky="ew", pady=6)
+        ttk.Button(form, text="Clear", command=lambda: self.lookup_table_filter.set("")).grid(
+            row=0, column=2, padx=(8, 0), pady=6
+        )
+        ttk.Label(form, text="Table", width=18).grid(row=1, column=0, sticky="w", pady=6)
         self.lookup_table_box = ttk.Combobox(form, textvariable=self.lookup_table, state="readonly", width=58)
-        self.lookup_table_box.grid(row=0, column=1, sticky="ew", pady=6)
+        self.lookup_table_box.grid(row=1, column=1, columnspan=2, sticky="ew", pady=6)
         self.lookup_table_box.bind("<<ComboboxSelected>>", self._lookup_table_selected)
-        ttk.Label(form, text="Column", width=18).grid(row=1, column=0, sticky="w", pady=6)
+        ttk.Label(form, text="Filter fields", width=18).grid(row=2, column=0, sticky="w", pady=6)
+        ttk.Entry(form, textvariable=self.lookup_column_filter).grid(row=2, column=1, sticky="ew", pady=6)
+        ttk.Button(form, text="Clear", command=lambda: self.lookup_column_filter.set("")).grid(
+            row=2, column=2, padx=(8, 0), pady=6
+        )
+        ttk.Label(form, text="Field", width=18).grid(row=3, column=0, sticky="w", pady=6)
         self.lookup_column_box = ttk.Combobox(form, textvariable=self.lookup_column, state="readonly", width=58)
-        self.lookup_column_box.grid(row=1, column=1, sticky="ew", pady=6)
-        ttk.Label(form, text="Exact value", width=18).grid(row=2, column=0, sticky="w", pady=6)
-        ttk.Entry(form, textvariable=self.lookup_value, width=60).grid(row=2, column=1, sticky="ew", pady=6)
-        ttk.Label(form, text="Direction", width=18).grid(row=3, column=0, sticky="nw", pady=6)
+        self.lookup_column_box.grid(row=3, column=1, columnspan=2, sticky="ew", pady=6)
+        ttk.Label(form, text="Exact value", width=18).grid(row=4, column=0, sticky="w", pady=6)
+        lookup_value_entry = ttk.Entry(form, textvariable=self.lookup_value, width=60)
+        lookup_value_entry.grid(row=4, column=1, sticky="ew", pady=6)
+        lookup_value_entry.bind("<Return>", self._lookup)
+        ttk.Button(form, text="Clear", command=lambda: self.lookup_value.set("")).grid(
+            row=4, column=2, padx=(8, 0), pady=6
+        )
+        ttk.Label(form, text="Direction", width=18).grid(row=5, column=0, sticky="nw", pady=6)
         directions = ttk.Frame(form)
-        directions.grid(row=3, column=1, sticky="w", pady=6)
+        directions.grid(row=5, column=1, columnspan=2, sticky="w", pady=6)
         ttk.Radiobutton(directions, text="Original → anonymized", value="original-to-anonymized",
                         variable=self.lookup_direction).pack(anchor="w")
         ttk.Radiobutton(directions, text="Anonymized → original", value="anonymized-to-original",
                         variable=self.lookup_direction).pack(anchor="w")
         form.columnconfigure(1, weight=1)
         lookup_buttons = ttk.Frame(form)
-        lookup_buttons.grid(row=4, column=1, sticky="w", pady=(10, 0))
+        lookup_buttons.grid(row=6, column=1, columnspan=2, sticky="w", pady=(10, 0))
         self.lookup_fields_button = ttk.Button(lookup_buttons, text="Load fields", command=self._load_lookup_fields)
         self.lookup_fields_button.pack(side="left")
         ttk.Button(lookup_buttons, text="Find mapping", command=self._lookup).pack(side="left", padx=(8, 0))
+        ttk.Button(lookup_buttons, text="Reset filters", command=self._reset_lookup_filters).pack(side="left", padx=(8, 0))
+        self.lookup_table_filter.trace_add("write", lambda *_args: self._filter_lookup_tables())
+        self.lookup_column_filter.trace_add("write", lambda *_args: self._filter_lookup_columns())
         ttk.Label(self.lookup_tab,
                   text="Uses the SQLite mapping store selected above. Search is exact and may return multiple values.",
                   wraplength=760).pack(anchor="w", pady=(16, 0))

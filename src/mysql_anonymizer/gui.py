@@ -1088,9 +1088,8 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             elif kind == "lookup_fields":
                 self.lookup_fields_by_table = value
                 tables = list(value)
-                self.lookup_table_box.configure(values=tables)
-                self.lookup_table.set(tables[0] if tables else "")
-                self._lookup_table_selected()
+                self._filter_lookup_tables()
+                self._filter_lookup_columns()
                 self._log(f"Loaded {len(tables)} mapped table(s) and their columns.")
             elif kind == "error":
                 self._diagnostic("operation_error_displayed", self._diagnostic_error(RuntimeError(value)))

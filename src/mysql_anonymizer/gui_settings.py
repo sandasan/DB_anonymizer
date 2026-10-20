@@ -174,10 +174,33 @@ class SettingsMixin:
         fields = list_mapping_fields(path)
         self.messages.put(("lookup_fields", fields))
 
+    def _filter_lookup_tables(self) -> None:
+        query = self.lookup_table_filter.get().strip().casefold()
+        tables = [name for name in self.lookup_fields_by_table if query in name.casefold()]
+        self.lookup_table_box.configure(values=tables)
+        if self.lookup_table.get() not in tables:
+            self.lookup_table.set(tables[0] if tables else "")
+            self._filter_lookup_columns()
+
     def _lookup_table_selected(self, _event=None) -> None:
-        columns = self.lookup_fields_by_table.get(self.lookup_table.get(), [])
+        self._filter_lookup_columns()
+
+    def _filter_lookup_columns(self) -> None:
+        query = self.lookup_column_filter.get().strip().casefold()
+        columns = [
+            name for name in self.lookup_fields_by_table.get(self.lookup_table.get(), [])
+            if query in name.casefold()
+        ]
         self.lookup_column_box.configure(values=columns)
-        self.lookup_column.set(columns[0] if columns else "")
+        if self.lookup_column.get() not in columns:
+            self.lookup_column.set(columns[0] if columns else "")
+
+    def _reset_lookup_filters(self) -> None:
+        self.lookup_table_filter.set("")
+        self.lookup_column_filter.set("")
+        self.lookup_value.set("")
+        self._filter_lookup_tables()
+        self._filter_lookup_columns()
 
     def _load_config(self) -> None:
         try:
