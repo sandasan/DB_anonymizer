@@ -21,6 +21,7 @@ from .gui_views import ViewMixin
 from .core import (
     CopyPaused,
     clear_destination_database_data,
+    clear_mapping_store,
     connect,
     copy_database,
     drop_destination_tables,
@@ -663,6 +664,16 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
         )
         if typed_name != destination:
             return
+        mapping_path = self.mapping_path.get().strip()
+        clear_mappings = False
+        if mapping_path:
+            clear_mappings = messagebox.askyesno(
+                "Clear mapping store too?",
+                "Clear every mapping in the selected SQLite mapping store as well? "
+                "This affects the whole mapping file, including other profiles or databases if they share it.\n\n"
+                f"{mapping_path}",
+                parent=self,
+            )
         try:
             config = self._config()
         except Exception as exc:
@@ -675,13 +686,20 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
             return
         self.copy_resume_state = None
         self.pause_event = None
-        self._run_async("Clearing destination data…", self._clear_destination_worker, config)
+        self._run_async(
+            "Clearing destination data…", self._clear_destination_worker,
+            config, mapping_path if clear_mappings else None,
+        )
 
-    def _clear_destination_worker(self, config: dict[str, Any]) -> None:
+    def _clear_destination_worker(self, config: dict[str, Any], mapping_path: str | None = None) -> None:
         names = clear_destination_database_data(config["destination"], config["source"])
+        mapping_count = clear_mapping_store(mapping_path) if mapping_path else 0
         identity = self._destination_identity(config)
-        self._diagnostic("destination_data_cleared", f"table_count={len(names)}")
-        self.messages.put(("destination_data_cleared", (identity, names)))
+        self._diagnostic(
+            "destination_data_cleared",
+            f"table_count={len(names)} mapping_count={mapping_count}",
+        )
+        self.messages.put(("destination_data_cleared", (identity, names, mapping_count, bool(mapping_path))))
 
     def _copy(self, action: str = "copy") -> None:
         if self.copy_resume_state is not None:
@@ -1069,7 +1087,7 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                 self._render_source_tables()
                 self._save_last_paths()
             elif kind == "destination_data_cleared":
-                identity, names = value
+                identity, names, mapping_count, mappings_cleared = value
                 self.copied_table_names.clear()
                 self.destination_table_names.difference_update(names)
                 identity_key = self._destination_identity_key(identity)
@@ -1078,8 +1096,13 @@ class AnonymizerApp(SettingsMixin, ViewMixin, tk.Tk):
                     self.recreated_table_names.clear()
                 self._render_source_tables()
                 self._save_last_paths()
-                self.messages.put(("log", f"Cleared {len(names)} destination table(s) and reset copy state."))
-                self.messages.put(("operation_status", "Destination data cleared; copy state reset."))
+                self.messages.put((
+                    "log",
+                    f"Cleared {len(names)} destination table(s), {mapping_count} mapping entr{'y' if mapping_count == 1 else 'ies'}, and reset copy state."
+                    if mappings_cleared else
+                    f"Cleared {len(names)} destination table(s) and reset copy state.",
+                ))
+                self.messages.put(("operation_status", "Destination data and selected mappings cleared; copy state reset." if mappings_cleared else "Destination data cleared; copy state reset."))
             elif kind == "log":
                 self._log(value)
             elif kind == "operation_status":

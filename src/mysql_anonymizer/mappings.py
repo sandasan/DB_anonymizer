@@ -43,3 +43,19 @@ def list_mapping_fields(path: str) -> dict[str, list[str]]:
         ):
             fields.setdefault(table, []).append(column)
     return fields
+
+
+def clear_mapping_store(path: str) -> int:
+    """Delete every saved mapping and checkpoint the SQLite store."""
+    if not os.path.exists(path):
+        return 0
+    db = open_mapping_store(path)
+    try:
+        cursor = db.execute("DELETE FROM mappings")
+        deleted = cursor.rowcount
+        db.commit()
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        db.execute("VACUUM")
+        return deleted
+    finally:
+        db.close()

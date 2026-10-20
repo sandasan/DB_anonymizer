@@ -3,7 +3,7 @@
 from .config import connect, load_json, save_json_atomic
 from .copying import (CopyPaused, clear_destination_database_data, copy_database,
                       drop_destination_tables, recreate_destination_database)
-from .mappings import list_mapping_fields, lookup_mapping, open_mapping_store
+from .mappings import clear_mapping_store, list_mapping_fields, lookup_mapping, open_mapping_store
 from .rules import init_rules, migrate_identifier_rules, prune_rules_to_schema, validate_rules
 from .schema import inspect_schema, qname, resolve_table_selection
 from .transformations import (
@@ -21,6 +21,7 @@ __all__ = [
     "copy_database",
     "drop_destination_tables",
     "clear_destination_database_data",
+    "clear_mapping_store",
     "init_rules",
     "inspect_schema",
     "list_mapping_fields",
