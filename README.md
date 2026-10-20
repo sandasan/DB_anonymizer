@@ -137,7 +137,7 @@ python -m pip install --upgrade pip
 python -m pip install -e .
 
 # Create a local connection settings file; edit it before connecting
-cp config.example.json config.json
+cp examples/config.example.json config.json
 
 # Ignore the virtual environment, caches, and local files containing settings/rules
 cat > .gitignore <<'EOF'
@@ -153,7 +153,7 @@ EOF
 
 # Initialize Git and commit the project files (credentials and local rules are excluded)
 git init
-git add README.md pyproject.toml requirements.txt config.example.json .gitignore mysql_anonymizer
+git add README.md pyproject.toml requirements.txt examples/config.example.json .gitignore src/mysql_anonymizer
 git commit -m "Set up MySQL anonymized copy CLI"
 ```
 
