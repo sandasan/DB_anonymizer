@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog,
-    QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 from .cli import check_config
@@ -79,17 +80,13 @@ class Task(QRunnable):
             self.signals.finished.emit()
 
 
-class TableTreeWidgetItem(QTreeWidgetItem):
-    """Sort the formatted size column by its underlying byte count."""
+class TableSizeDelegate(QStyledItemDelegate):
+    """Render numeric size sort values as readable MiB strings."""
 
-    def __lt__(self, other: QTreeWidgetItem) -> bool:
-        tree = self.treeWidget()
-        if tree is not None and tree.sortColumn() == 3:
-            role = Qt.UserRole + 1
-            left = self.data(3, role)
-            right = other.data(3, role)
-            return (left if left is not None else -1) < (right if right is not None else -1)
-        return super().__lt__(other)
+    def displayText(self, value: Any, locale) -> str:
+        if isinstance(value, (int, float)):
+            return "—" if value < 0 else f"{value / (1024 * 1024):.1f} MiB"
+        return str(value)
 
 
 class AnonymizerWindow(QMainWindow):
@@ -279,6 +276,7 @@ class AnonymizerWindow(QMainWindow):
         filter_row.addWidget(self.table_filter, 1); layout.addLayout(filter_row)
         self.table_view = QTreeWidget(); self.table_view.setHeaderLabels(["Destination", "Table", "Records", "Size", "References"])
         self.table_view.setSelectionMode(QTreeWidget.ExtendedSelection); self.table_view.setSortingEnabled(True)
+        self.table_view.setItemDelegateForColumn(3, TableSizeDelegate(self.table_view))
         self.table_view.header().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table_view.setMinimumHeight(300); layout.addWidget(self.table_view, 1)
         self.table_view.itemSelectionChanged.connect(self._selected_items_changed)
@@ -728,12 +726,11 @@ class AnonymizerWindow(QMainWindow):
             if query and query not in name.casefold(): continue
             refs = ", ".join(table.get("references", []))
             size = table.get("size_bytes")
-            size_text = f"{size / (1024*1024):.1f} MiB" if isinstance(size, (int,float)) else "—"
             count = table.get("row_count"); count_text = f"~{count:,}" if count is not None and table.get("row_count_is_estimate") else f"{count:,}" if count is not None else "—"
             mark = "✓" if name in self.destination_tables else ""
-            item = TableTreeWidgetItem([mark, name, count_text, size_text, refs])
+            item = QTreeWidgetItem([mark, name, count_text, "", refs])
             item.setData(1, Qt.UserRole, name)
-            item.setData(3, Qt.UserRole + 1, size if isinstance(size, (int, float)) else -1)
+            item.setData(3, Qt.DisplayRole, size if isinstance(size, (int, float)) else -1)
             self.table_view.addTopLevelItem(item)
             if name in selected: item.setSelected(True)
         self.table_view.blockSignals(False)
