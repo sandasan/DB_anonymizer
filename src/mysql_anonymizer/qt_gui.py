@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -169,10 +170,13 @@ class AnonymizerWindow(QMainWindow):
         self.overall_title = QLabel("Overall progress")
         self.overall_progress = QProgressBar(); self.overall_progress.setRange(0, 1000)
         self.table_title = QLabel("Current table")
+        self.table_eta = QLabel("ETA: —")
         self.table_progress = QProgressBar(); self.table_progress.setRange(0, 1000)
+        self._table_started_at: float | None = None
         self.status = QLabel("Load connection settings, then inspect the source.")
         root.addWidget(self.overall_title); root.addWidget(self.overall_progress)
-        root.addWidget(self.table_title); root.addWidget(self.table_progress); root.addWidget(self.status)
+        root.addWidget(self.table_title); root.addWidget(self.table_eta)
+        root.addWidget(self.table_progress); root.addWidget(self.status)
 
         self.tabs = QTabWidget(); root.addWidget(self.tabs, 1)
         self.connections_tab = QWidget(); self.tables_tab = QWidget(); self.rules_tab = QWidget()
@@ -578,15 +582,44 @@ class AnonymizerWindow(QMainWindow):
         event = value.get("event")
         if event == "inspect":
             self.status.setText(value.get("status", "Inspecting source…")); return
-        if event == "copy_started": self.overall_progress.setRange(0, 0); self.table_progress.setRange(0, 0); return
-        if event == "copy_finished": self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(1000); self.table_progress.setRange(0, 1000); self.table_progress.setValue(1000); return
+        if event == "copy_started":
+            self._table_started_at = None
+            self.table_eta.setText("ETA: waiting for first table")
+            self.overall_progress.setRange(0, 0); self.table_progress.setRange(0, 0); return
+        if event == "copy_finished":
+            self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(1000)
+            self.table_progress.setRange(0, 1000); self.table_progress.setValue(1000)
+            self.table_eta.setText("ETA: complete")
+            return
         total = value.get("total_tables") or 0; complete = value.get("completed_tables") or 0
         if total:
             self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(int(1000 * complete / total))
         rows, copied = value.get("table_rows") or 0, value.get("copied_rows") or 0
+        if event == "table":
+            self._table_started_at = time.monotonic()
+            self.table_eta.setText("ETA: estimating…")
+        elif event == "batch" and self._table_started_at is not None:
+            elapsed = time.monotonic() - self._table_started_at
+            remaining = max(0, rows - copied)
+            if copied > 0 and elapsed > 0:
+                eta_seconds = elapsed * remaining / copied
+                self.table_eta.setText(f"ETA: about {self._format_duration(eta_seconds)}")
+        elif event == "table_done":
+            self.table_eta.setText("ETA: complete")
         if rows:
             self.table_progress.setRange(0, 1000); self.table_progress.setValue(int(1000 * copied / rows))
         self.status.setText(f"{value.get('table', 'Copying')} — {copied:,}/{rows:,} rows" if rows else str(value.get("event", "Working…")))
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        seconds = max(0, int(seconds + 0.5))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}h {minutes}m"
+        if minutes:
+            return f"{minutes}m {seconds}s"
+        return f"{seconds}s"
 
     def log_message(self, message: str) -> None:
         self.log.appendPlainText(str(message))
