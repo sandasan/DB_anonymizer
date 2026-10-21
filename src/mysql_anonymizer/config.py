@@ -40,4 +40,9 @@ def connect(settings: dict[str, Any]):
         if env not in os.environ:
             raise ValueError(f"Environment variable {env} is not set")
         options["password"] = os.environ[env]
+    # Prefer the Python implementation for long-running copy jobs. The optional
+    # C extension runs inside the GUI process and a native crash bypasses the
+    # worker's exception handling and traceback logging. Advanced users can
+    # explicitly set use_pure=false in connection settings to opt back in.
+    options.setdefault("use_pure", True)
     return mysql.connector.connect(**options)

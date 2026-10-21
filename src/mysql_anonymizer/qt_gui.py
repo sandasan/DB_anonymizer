@@ -882,20 +882,26 @@ class AnonymizerWindow(QMainWindow):
             action = state.get("recreate_action", "copy")
             if action == "recreate_database" and not state.get("is_resume"): recreate_destination_database(config["destination"], config["source"])
             destination = _connect("destination", config["destination"])
+            self._write_activity_log(f"copy_connection source_driver={type(source).__name__}")
+            self._write_activity_log(f"copy_connection destination_driver={type(destination).__name__}")
             if action == "replace_tables" and not state.get("is_resume"):
                 cur = destination.cursor(); cur.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()")
                 existing = {r[0] for r in cur.fetchall()}; cur.close()
                 resolve_table_selection(tables, state["selected"], state["include_dependencies"], existing - set(state["selected"]))
                 drop_destination_tables(destination, state["selected"])
             def report(item: dict[str, Any]) -> None:
-                nonlocal last_activity_log
+                nonlocal last_activity_log, last_logged_batch_table
                 if item.get("event") == "start" and not state.get("is_resume"):
                     state["is_resume"] = True; state["selected"] = item.get("selected_tables", state["selected"]); self.write_checkpoint(state)
                 elif item.get("event") == "table_done":
                     counts = dict(state.get("completed_counts", {})); counts[item["table"]] = item["copied_rows"]; state["completed_counts"] = counts; self.write_checkpoint(state)
                 event = item.get("event")
                 now = time.monotonic()
-                if event in {"start", "table", "table_done"} or (event == "batch" and now - last_activity_log >= 30):
+                log_batch = event == "batch" and (
+                    item.get("table") != last_logged_batch_table
+                    or now - last_activity_log >= 2
+                )
+                if event in {"start", "table", "table_done"} or log_batch:
                     rss_mb = self._process_rss_mb()
                     memory = f" rss_mb={rss_mb:.1f}" if rss_mb is not None else ""
                     detail = (
@@ -908,8 +914,11 @@ class AnonymizerWindow(QMainWindow):
                     )
                     self._write_activity_log(f"copy_progress{detail}")
                     last_activity_log = now
+                    if event == "batch":
+                        last_logged_batch_table = item.get("table")
                 progress(item)
             last_activity_log = time.monotonic()
+            last_logged_batch_table = None
             counts = copy_database(source, destination, config["source"]["database"], rules, config.get("batch_size", 2000), state["allow_locks"], state["mapping_path"], state["selected"], state["include_dependencies"], report, state.get("completed_counts", {}), pause_event, bool(state.get("is_resume")))
             self._write_activity_log(f"copy_finished tables={len(counts)}")
             self._checkpoint_path().unlink(missing_ok=True)
