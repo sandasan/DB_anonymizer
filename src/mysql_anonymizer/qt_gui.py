@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import faulthandler
 import json
 import os
 import sys
@@ -137,6 +138,19 @@ class AnonymizerWindow(QMainWindow):
     @classmethod
     def _error_log_path(cls) -> Path:
         return cls._state_file().with_name("gui_errors.log")
+
+    @classmethod
+    def _write_error_log(cls, operation: str, message: str, traceback_text: str) -> Path:
+        log_path = cls._error_log_path()
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        entry = f"[{timestamp}] {operation}: {message}\n{traceback_text.rstrip()}\n\n"
+        log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try: log_path.parent.chmod(0o700)
+        except OSError: pass
+        with log_path.open("a", encoding="utf-8") as log_file:
+            os.chmod(log_path, 0o600)
+            log_file.write(entry)
+        return log_path
 
     def _init_paths(self) -> None:
         self.config_path = "config.json"
@@ -542,16 +556,8 @@ class AnonymizerWindow(QMainWindow):
 
     def on_error(self, operation: str, message: str, traceback_text: str) -> None:
         self.status.setText("Operation failed."); self.log_message("Error: " + message)
-        log_path = self._error_log_path()
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        entry = (f"[{timestamp}] {operation}: {message}\n{traceback_text.rstrip()}\n\n")
         try:
-            log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            try: log_path.parent.chmod(0o700)
-            except OSError: pass
-            with log_path.open("a", encoding="utf-8") as log_file:
-                os.chmod(log_path, 0o600)
-                log_file.write(entry)
+            log_path = self._write_error_log(operation, message, traceback_text)
         except OSError as exc:
             self.log_message(f"Could not write traceback log: {exc}")
         else:
@@ -1036,7 +1042,41 @@ class AnonymizerWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("MySQL Anonymized Copy")
-    window = AnonymizerWindow(); window.show()
+    window = AnonymizerWindow()
+    log_path = window._error_log_path()
+    try:
+        log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try: log_path.parent.chmod(0o700)
+        except OSError: pass
+        crash_log = log_path.open("a", encoding="utf-8", buffering=1)
+        os.chmod(log_path, 0o600)
+        # Keep the descriptor alive for faulthandler so native crashes also leave
+        # Python thread stacks in the same private diagnostic log.
+        faulthandler.enable(file=crash_log, all_threads=True)
+    except (OSError, RuntimeError, ValueError):
+        crash_log = None
+
+    def handle_uncaught(exc_type, exc_value, exc_tb) -> None:
+        message = str(exc_value) or exc_type.__name__
+        details = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        try:
+            window._write_error_log("uncaught GUI exception", message, details)
+        except OSError:
+            print(details, file=sys.__stderr__)
+        try:
+            window.log_message(f"Unexpected application error: {message}")
+            window.log_message(f"Diagnostic log: {log_path}")
+            if window.pause_event is not None:
+                window.pause_event.set()
+            QTimer.singleShot(0, lambda: window.error(
+                "Unexpected application error",
+                f"The operation was stopped at a safe batch boundary where possible. Diagnostics were saved to:\n{log_path}\n\n{message}"
+            ))
+        except Exception:
+            print(details, file=sys.__stderr__)
+
+    sys.excepthook = handle_uncaught
+    window.show()
     raise SystemExit(app.exec())
 
 
