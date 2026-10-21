@@ -78,6 +78,19 @@ class Task(QRunnable):
             self.signals.finished.emit()
 
 
+class TableTreeWidgetItem(QTreeWidgetItem):
+    """Sort the formatted size column by its underlying byte count."""
+
+    def __lt__(self, other: QTreeWidgetItem) -> bool:
+        tree = self.treeWidget()
+        if tree is not None and tree.sortColumn() == 3:
+            role = Qt.UserRole + 1
+            left = self.data(3, role)
+            right = other.data(3, role)
+            return (left if left is not None else -1) < (right if right is not None else -1)
+        return super().__lt__(other)
+
+
 class AnonymizerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -712,7 +725,9 @@ class AnonymizerWindow(QMainWindow):
             size_text = f"{size / (1024*1024):.1f} MiB" if isinstance(size, (int,float)) else "—"
             count = table.get("row_count"); count_text = f"~{count:,}" if count is not None and table.get("row_count_is_estimate") else f"{count:,}" if count is not None else "—"
             mark = "✓" if name in self.destination_tables else ""
-            item = QTreeWidgetItem([mark, name, count_text, size_text, refs]); item.setData(1, Qt.UserRole, name)
+            item = TableTreeWidgetItem([mark, name, count_text, size_text, refs])
+            item.setData(1, Qt.UserRole, name)
+            item.setData(3, Qt.UserRole + 1, size if isinstance(size, (int, float)) else -1)
             self.table_view.addTopLevelItem(item)
             if name in selected: item.setSelected(True)
         self.table_view.blockSignals(False)
