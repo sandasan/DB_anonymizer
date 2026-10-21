@@ -137,6 +137,35 @@ class AnonymizerWindow(QMainWindow):
         return cls._state_file().with_name("gui_errors.log")
 
     @classmethod
+    def _activity_log_path(cls) -> Path:
+        return cls._state_file().with_name("gui_activity.log")
+
+    @classmethod
+    def _write_activity_log(cls, message: str) -> None:
+        path = cls._activity_log_path()
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try: path.parent.chmod(0o700)
+            except OSError: pass
+            with path.open("a", encoding="utf-8") as log_file:
+                os.chmod(path, 0o600)
+                log_file.write(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] {message}\n")
+        except OSError:
+            pass
+
+    @staticmethod
+    def _process_rss_mb() -> float | None:
+        """Read resident memory on Linux without requiring an extra dependency."""
+        try:
+            with open("/proc/self/status", encoding="ascii") as status:
+                for line in status:
+                    if line.startswith("VmRSS:"):
+                        return int(line.split()[1]) / 1024
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    @classmethod
     def _write_error_log(cls, operation: str, message: str, traceback_text: str) -> Path:
         log_path = cls._error_log_path()
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -554,6 +583,7 @@ class AnonymizerWindow(QMainWindow):
 
     def on_error(self, operation: str, message: str, traceback_text: str) -> None:
         self.status.setText("Operation failed."); self.log_message("Error: " + message)
+        self._write_activity_log(f"operation_failed operation={operation}")
         try:
             log_path = self._write_error_log(operation, message, traceback_text)
         except OSError as exc:
@@ -814,12 +844,30 @@ class AnonymizerWindow(QMainWindow):
                 resolve_table_selection(tables, state["selected"], state["include_dependencies"], existing - set(state["selected"]))
                 drop_destination_tables(destination, state["selected"])
             def report(item: dict[str, Any]) -> None:
+                nonlocal last_activity_log
                 if item.get("event") == "start" and not state.get("is_resume"):
                     state["is_resume"] = True; state["selected"] = item.get("selected_tables", state["selected"]); self.write_checkpoint(state)
                 elif item.get("event") == "table_done":
                     counts = dict(state.get("completed_counts", {})); counts[item["table"]] = item["copied_rows"]; state["completed_counts"] = counts; self.write_checkpoint(state)
+                event = item.get("event")
+                now = time.monotonic()
+                if event in {"start", "table", "table_done"} or (event == "batch" and now - last_activity_log >= 30):
+                    rss_mb = self._process_rss_mb()
+                    memory = f" rss_mb={rss_mb:.1f}" if rss_mb is not None else ""
+                    detail = (
+                        f" event={event} table={item.get('table', '-')!r}"
+                        f" copied_rows={item.get('copied_rows', 0)}"
+                        f" table_rows={item.get('table_rows', 0)}"
+                        f" completed_tables={item.get('completed_tables', len(state.get('completed_counts', {})))}"
+                        f" total_tables={item.get('total_tables', 0)}"
+                        f"{memory}"
+                    )
+                    self._write_activity_log(f"copy_progress{detail}")
+                    last_activity_log = now
                 progress(item)
+            last_activity_log = time.monotonic()
             counts = copy_database(source, destination, config["source"]["database"], rules, config.get("batch_size", 2000), state["allow_locks"], state["mapping_path"], state["selected"], state["include_dependencies"], report, state.get("completed_counts", {}), pause_event, bool(state.get("is_resume")))
+            self._write_activity_log(f"copy_finished tables={len(counts)}")
             self._checkpoint_path().unlink(missing_ok=True)
             try: fields = list_mapping_fields(state["mapping_path"]) if state.get("mapping_path") else None
             except Exception: fields = None
@@ -1050,6 +1098,10 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("MySQL Anonymized Copy")
     window = AnonymizerWindow()
+    try:
+        window._write_activity_log(f"application_started python={sys.version_info.major}.{sys.version_info.minor}")
+    except OSError:
+        pass
     log_path = window._error_log_path()
     try:
         log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
