@@ -28,31 +28,9 @@ from PySide6.QtWidgets import (
 
 from .cli import check_config
 from .core import (
-    clear_destination_database_data, clear_mapping_store, connect, inspect_schema,
     list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
     save_json_atomic,
 )
-
-
-def _connect(role: str, settings: dict[str, Any]):
-    try:
-        return connect(settings)
-    except Exception as exc:
-        host, port = settings.get("host", "localhost"), settings.get("port", 3306)
-        database, user = settings.get("database", "<not set>"), settings.get("user", "<not set>")
-        errno = getattr(exc, "errno", None)
-        if errno == 1045:
-            hint = "Check the username, password, and host permissions; MySQL error 1045 does not distinguish these causes."
-        elif errno == 1044:
-            hint = "The account needs grants on the selected database."
-        elif errno == 1049:
-            hint = "Check the database name."
-        else:
-            hint = "Check that the server is reachable and the account has the required permissions."
-        raise RuntimeError(
-            f"Could not connect to {role} database {database!r} as {user!r} at {host}:{port}. "
-            f"{hint}\nMySQL error: {exc}"
-        ) from exc
 
 
 class TaskSignals(QObject):
@@ -88,7 +66,6 @@ class TableSizeDelegate(QStyledItemDelegate):
         return str(value)
 
 
-        self._pending_lookup_selection: tuple[str, str] | None = None
 class AnonymizerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -102,6 +79,8 @@ class AnonymizerWindow(QMainWindow):
         self._copy_worker_paths: dict[str, Path] | None = None
         self._copy_stderr_handle = None
         self._copy_progress_mtime_ns: int | None = None
+        self._active_worker_mode = "copy"
+        self._last_progress_ui_update = 0.0
         self.busy = False
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
@@ -109,6 +88,7 @@ class AnonymizerWindow(QMainWindow):
         self.copied_tables: set[str] = set()
         self.browse_tables: dict[str, list[dict[str, Any]]] = {"source": [], "destination": []}
         self.mapping_fields: dict[str, list[str]] = {}
+        self._pending_lookup_selection: tuple[str, str] | None = None
         self.copy_resume: dict[str, Any] | None = None
         self.pause_event: threading.Event | None = None
         self.close_when_paused = False
@@ -281,7 +261,6 @@ class AnonymizerWindow(QMainWindow):
         scroll.setWidget(body); outer.addWidget(scroll); return self._page_body_layout
 
     def _build_connections(self) -> None:
-        self.hide_copied_check = QCheckBox("Hide copied tables"); self.hide_copied_check.toggled.connect(self.render_tables)
         layout = self._scroll_page(self.connections_tab)
         splitter = QSplitter(Qt.Horizontal)
         for role in ("source", "destination"):
@@ -302,6 +281,7 @@ class AnonymizerWindow(QMainWindow):
         self.include_check = QCheckBox("Include referenced tables automatically"); self.include_check.setChecked(True)
         self.allow_locks_check = QCheckBox("Allow source table locks for non-InnoDB")
         self.selected_top_check = QCheckBox("Show selected tables at top"); self.selected_top_check.toggled.connect(self.render_tables)
+        self.hide_copied_check = QCheckBox("Hide copied tables"); self.hide_copied_check.toggled.connect(self.render_tables)
         self.recreate_tables_btn = QPushButton("Recreate selected tables"); self.recreate_tables_btn.clicked.connect(self.recreate_tables)
         self.recreate_db_btn = QPushButton("Recreate destination DB"); self.recreate_db_btn.clicked.connect(self.recreate_database)
         self.clear_data_btn = QPushButton("Clear destination data"); self.clear_data_btn.clicked.connect(self.clear_destination)
@@ -334,7 +314,6 @@ class AnonymizerWindow(QMainWindow):
         controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status); layout.addLayout(controls)
         self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Rule status"])
         self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.lookup_value.textChanged.connect(self._accept_browse_cell_payload)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
         self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"])
@@ -355,6 +334,7 @@ class AnonymizerWindow(QMainWindow):
         self.lookup_table = QComboBox(); self.lookup_table.setEditable(False)
         self.lookup_column_filter = QLineEdit(); self.lookup_column_filter.setPlaceholderText("Filter fields")
         self.lookup_column = QComboBox(); self.lookup_value = QLineEdit()
+        self.lookup_value.textChanged.connect(self._accept_browse_cell_payload)
         self.lookup_direction = QComboBox(); self.lookup_direction.addItem("Original → anonymized", "original-to-anonymized"); self.lookup_direction.addItem("Anonymized → original", "anonymized-to-original")
         for label, widget in (("Filter tables", self.lookup_table_filter), ("Table", self.lookup_table), ("Filter fields", self.lookup_column_filter), ("Field", self.lookup_column), ("Exact value", self.lookup_value), ("Direction", self.lookup_direction)):
             form.addRow(label, widget)
@@ -366,10 +346,6 @@ class AnonymizerWindow(QMainWindow):
         self.lookup_table_filter.textChanged.connect(self.filter_lookup_tables); self.lookup_column_filter.textChanged.connect(self.filter_lookup_columns)
         self.lookup_table.currentTextChanged.connect(self.filter_lookup_columns)
         layout.addWidget(QLabel("Searches the selected SQLite mapping store. Matching is exact.")); layout.addStretch(1)
-        copy_cell = QPushButton("Copy selected cell for Lookup")
-        copy_cell.setToolTip("Copy the selected cell with its table and column so it can be pasted into Lookup.")
-        copy_cell.clicked.connect(self.copy_browse_cell_for_lookup)
-        layout.addWidget(copy_cell)
 
     def _build_browse(self) -> None:
         layout = self._scroll_page(self.browse_tab)
@@ -390,6 +366,10 @@ class AnonymizerWindow(QMainWindow):
         layout.addLayout(form)
         self.browse_view = QTableWidget(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
         self.browse_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        copy_cell = QPushButton("Copy selected cell for Lookup")
+        copy_cell.setToolTip("Copy the selected cell with its table and column so it can be pasted into Lookup.")
+        copy_cell.clicked.connect(self.copy_browse_cell_for_lookup)
+        layout.addWidget(copy_cell)
         layout.addWidget(self.browse_view, 1)
         self.browse_search_all.returnPressed.connect(self.search_browse); self.browse_column_value.returnPressed.connect(self.search_browse)
 
@@ -621,7 +601,9 @@ class AnonymizerWindow(QMainWindow):
         if not isinstance(result, tuple) or not result: return
         kind = result[0]
         if kind == "inspection":
-            _, self.tables, self.destination_tables, config = result; self.table_names = [t["name"] for t in self.tables]
+            _, self.tables, destination_tables, config = result
+            self.destination_tables = set(destination_tables)
+            self.table_names = [t["name"] for t in self.tables]
             self.inspection_snapshot = {"source": self.source_identity(config), "fingerprint": self.schema_fingerprint(self.tables)}
             identity = self.destination_identity(config)
             if self.copied_destination_identity != identity: self.copied_tables.clear()
@@ -656,6 +638,10 @@ class AnonymizerWindow(QMainWindow):
 
     def on_progress(self, value: dict[str, Any]) -> None:
         event = value.get("event")
+        now = time.monotonic()
+        if event == "batch" and now - self._last_progress_ui_update < 1.5:
+            return
+        self._last_progress_ui_update = now
         if event == "inspect":
             self.status.setText(value.get("status", "Inspecting source…")); return
         if event == "copy_started":
@@ -750,45 +736,12 @@ class AnonymizerWindow(QMainWindow):
     def inspect(self) -> None:
         try: config = self.config()
         except Exception as exc: return self.error("Invalid connection settings", exc)
-        self.run_task("Inspecting source schema…", self._inspect_worker, config)
-
-    def _inspect_worker(self, config: dict[str, Any], progress: Callable) -> tuple:
-        source = _connect("source", config["source"])
-        try:
-            progress({"event": "inspect", "status": "Reading source schema…"})
-            tables = inspect_schema(source, config["source"]["database"])
-            cursor = source.cursor()
-            cursor.execute("SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'", (config["source"]["database"],))
-            stats = {r[0]: (r[1], (r[2] or 0) + (r[3] or 0)) for r in cursor.fetchall()}; cursor.close()
-            for table in tables:
-                table["row_count"], table["size_bytes"] = stats.get(table["name"], (None, 0))
-                table["row_count_is_estimate"] = str(table.get("engine", "")).lower() == "innodb"
-        finally: source.close()
-        destination_tables: set[str] = set()
-        try:
-            dest = _connect("destination", config["destination"]); cur = dest.cursor()
-            cur.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'", (config["destination"]["database"],))
-            destination_tables = {r[0] for r in cur.fetchall()}; cur.close(); dest.close()
-        except Exception:
-            if self.hide_copied_check.isChecked() and name in self.copied_tables: continue
-            destination_tables = set()
-        return ("inspection", tables, destination_tables, config)
+        self._launch_database_operation("inspect", {"config": config}, "Inspecting source schema…")
 
     def test_connections(self) -> None:
         try: config = self.config()
         except Exception as exc: return self.error("Invalid connection settings", exc)
-        self.run_task("Testing source and destination connections…", self._test_worker, config)
-
-    @staticmethod
-    def _test_worker(config: dict[str, Any], progress: Callable) -> tuple:
-        reports = []
-        for role in ("source", "destination"):
-            conn = None
-            try: conn = _connect(role, config[role]); reports.append(f"✓ {role}: connected to {config[role].get('database')}.")
-            except Exception as exc: reports.append(f"✗ {role}: {exc}")
-            finally:
-                if conn: conn.close()
-        return ("connection_report", "\n\n".join(reports))
+        self._launch_database_operation("test_connections", {"config": config}, "Testing source and destination connections…")
 
     @staticmethod
     def source_identity(config: dict[str, Any]) -> dict[str, Any]:
@@ -817,6 +770,7 @@ class AnonymizerWindow(QMainWindow):
         items = []
         for table in tables:
             name = table["name"]
+            if self.hide_copied_check.isChecked() and name in self.copied_tables: continue
             if query and query not in name.casefold(): continue
             refs = ", ".join(table.get("references", []))
             size = table.get("size_bytes")
@@ -910,12 +864,14 @@ class AnonymizerWindow(QMainWindow):
             )
         }
         job["inspection_snapshot"] = self.inspection_snapshot
+        job["parent_pid"] = os.getpid()
         save_json_atomic(str(paths["job_path"]), job)
         paths["job_path"].chmod(0o600)
         self._copy_worker_paths = paths
+        self._active_worker_mode = "copy"
         self._copy_progress_mtime_ns = None
         self._copy_progress_timer = QTimer(self)
-        self._copy_progress_timer.setInterval(250)
+        self._copy_progress_timer.setInterval(1000)
         self._copy_progress_timer.timeout.connect(self._poll_copy_progress)
         self._copy_progress_timer.start()
         self.busy = True
@@ -952,6 +908,63 @@ class AnonymizerWindow(QMainWindow):
             self.on_error("copy", str(exc), traceback.format_exc())
             self.on_finished()
 
+    def _launch_database_operation(self, operation: str, args: dict[str, Any], title: str) -> None:
+        """Run connector-backed work in a process with no Qt objects loaded."""
+        checkpoint = self._checkpoint_path()
+        paths = {
+            "checkpoint_path": checkpoint,
+            "progress_path": checkpoint.with_name("copy_progress.json"),
+            "result_path": checkpoint.with_name("copy_result.json"),
+            "pause_path": checkpoint.with_name("copy_pause.request"),
+            "job_path": checkpoint.with_name("copy_worker_job.json"),
+            "activity_path": self._activity_log_path(),
+            "error_path": self._error_log_path(),
+        }
+        for key in ("progress_path", "result_path", "pause_path", "job_path"):
+            paths[key].unlink(missing_ok=True)
+        job = {key: str(paths[key]) for key in (
+            "result_path", "activity_path", "error_path",
+        )}
+        job.update({
+            "mode": "operation", "operation": operation, "args": args,
+            "parent_pid": os.getpid(),
+        })
+        save_json_atomic(str(paths["job_path"]), job)
+        paths["job_path"].chmod(0o600)
+        self._copy_worker_paths = paths
+        self._active_worker_mode = "operation"
+        self._copy_progress_mtime_ns = None
+        self._copy_progress_timer = QTimer(self)
+        self._copy_progress_timer.setInterval(1000)
+        self._copy_progress_timer.timeout.connect(self._poll_copy_progress)
+        self._copy_progress_timer.start()
+        self.busy = True
+        self._set_busy(True)
+        self.status.setText(title)
+        try:
+            log_path = paths["error_path"]
+            log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try:
+                log_path.parent.chmod(0o700)
+            except OSError:
+                pass
+            self._copy_stderr_handle = log_path.open("a", encoding="utf-8", buffering=1)
+            os.chmod(log_path, 0o600)
+            self._copy_process = subprocess.Popen(
+                [sys.executable, "-m", "mysql_anonymizer.copy_worker", str(paths["job_path"])],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=self._copy_stderr_handle,
+            )
+            self._write_activity_log(f"database_worker operation={operation} pid={self._copy_process.pid}")
+        except Exception as exc:
+            self._copy_process = None
+            if self._copy_stderr_handle is not None:
+                self._copy_stderr_handle.close()
+                self._copy_stderr_handle = None
+            self.on_error(operation, str(exc), traceback.format_exc())
+            self.on_finished()
+
     def _poll_copy_progress(self) -> None:
         paths = self._copy_worker_paths
         if paths is None:
@@ -983,18 +996,25 @@ class AnonymizerWindow(QMainWindow):
         except (OSError, json.JSONDecodeError):
             result = None
 
-        if result and result.get("kind") == "copy":
+        if result and result.get("kind") == "operation":
+            self.on_result(tuple(result["result"]))
+        elif result and result.get("kind") == "copy":
             counts = result["counts"]
             self.on_result(("copy", counts, set(counts), result.get("fields"), tuple(result["identity"])))
         elif result and result.get("kind") == "paused":
             self.on_result(("paused", result["state"]))
         else:
-            try:
-                self.copy_resume = load_json(str(paths["checkpoint_path"]))
-            except (OSError, json.JSONDecodeError):
-                pass
+            if self._active_worker_mode == "copy":
+                try:
+                    self.copy_resume = load_json(str(paths["checkpoint_path"]))
+                except (OSError, json.JSONDecodeError):
+                    pass
             if result and result.get("kind") == "error":
-                self.on_error("copy", result.get("message", "Copy failed."), result.get("traceback", ""))
+                self.on_error(
+                    result.get("operation", "copy"),
+                    result.get("message", "Operation failed."),
+                    result.get("traceback", ""),
+                )
             else:
                 message = (
                     f"Copy worker exited unexpectedly (exit code {process.returncode}). "
@@ -1051,12 +1071,12 @@ class AnonymizerWindow(QMainWindow):
         try: self._checkpoint_path().unlink(missing_ok=True)
         except OSError as exc: return self.error("Could not discard saved copy", exc)
         self.copy_resume = None; self.pause_event = None
-        self.run_task("Clearing destination data…", self._clear_worker, config, mapping if clear_maps else None)
-
-    @staticmethod
-    def _clear_worker(config: dict, mapping: str | None, progress: Callable) -> tuple:
-        names = clear_destination_database_data(config["destination"], config["source"]); count = clear_mapping_store(mapping) if mapping else 0
-        return ("clear", names, count)
+        self._launch_database_operation(
+            "clear_destination",
+            {"destination": config["destination"], "source": config["source"],
+             "mapping": mapping if clear_maps else None},
+            "Clearing destination data…",
+        )
 
     # Rule navigator/editor
     def refresh_rules(self) -> None:
@@ -1144,26 +1164,6 @@ class AnonymizerWindow(QMainWindow):
     def reset_lookup(self) -> None:
         self.lookup_table_filter.clear(); self.lookup_column_filter.clear(); self.lookup_value.clear()
 
-    def lookup(self) -> None:
-        path, table, column = self.mapping_edit.text().strip(), self.lookup_table.currentText(), self.lookup_column.currentText()
-        if not path or not table or not column: return self.info("Complete lookup fields", "Select a mapping store, table, and field.")
-        self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData())
-
-    @staticmethod
-    def _lookup_worker(path: str, table: str, column: str, value: str, direction: str, progress: Callable) -> tuple:
-        return ("lookup", direction, table, column, value, lookup_mapping(path, table, column, value, direction))
-
-    # Source/destination browsing
-    def load_browse_tables(self) -> None:
-        try: config = self.config()
-        except Exception as exc: return self.error("Invalid connection settings", exc)
-        role = self.browse_role.currentText(); self.run_task(f"Loading {role} tables…", self._browse_tables_worker, role, config[role])
-
-    @staticmethod
-    def _browse_tables_worker(role: str, settings: dict, progress: Callable) -> tuple:
-        conn = _connect(role, settings)
-        try: return ("browse_tables", role, inspect_schema(conn, settings["database"]))
-        finally: conn.close()
     def copy_browse_cell_for_lookup(self) -> None:
         row, column = self.browse_view.currentRow(), self.browse_view.currentColumn()
         item = self.browse_view.item(row, column) if row >= 0 and column >= 0 else None
@@ -1205,6 +1205,24 @@ class AnonymizerWindow(QMainWindow):
             self.lookup_column_filter.clear()
             self.lookup_column.setCurrentText(column)
 
+    def lookup(self) -> None:
+        path, table, column = self.mapping_edit.text().strip(), self.lookup_table.currentText(), self.lookup_column.currentText()
+        if not path or not table or not column: return self.info("Complete lookup fields", "Select a mapping store, table, and field.")
+        self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData())
+
+    @staticmethod
+    def _lookup_worker(path: str, table: str, column: str, value: str, direction: str, progress: Callable) -> tuple:
+        return ("lookup", direction, table, column, value, lookup_mapping(path, table, column, value, direction))
+
+    # Source/destination browsing
+    def load_browse_tables(self) -> None:
+        try: config = self.config()
+        except Exception as exc: return self.error("Invalid connection settings", exc)
+        role = self.browse_role.currentText()
+        self._launch_database_operation(
+            "browse_tables", {"role": role, "settings": config[role]},
+            f"Loading {role} tables…",
+        )
 
     def filter_browse_tables(self, *_args) -> None:
         if not hasattr(self, "browse_table"): return
@@ -1224,22 +1242,14 @@ class AnonymizerWindow(QMainWindow):
         try: config = self.config()
         except Exception as exc: return self.error("Invalid connection settings", exc)
         columns = [c["COLUMN_NAME"] for c in item["columns"]]
-        self.run_task(f"Reading {role}.{table}…", self._browse_query_worker, role, config[role], table, columns, self.browse_search_all.text(), self.browse_column.currentText(), self.browse_column_value.text())
-
-    @staticmethod
-    def _browse_query_worker(role: str, settings: dict, table: str, columns: list[str], search: str, filter_column: str, filter_value: str, progress: Callable) -> tuple:
-        conn = _connect(role, settings); cur = conn.cursor()
-        try:
-            conditions, params = [], []
-            if search:
-                conditions.append("(" + " OR ".join(f"CAST(`{c.replace('`','``')}` AS CHAR) LIKE %s" for c in columns) + ")"); params.extend([f"%{search}%"] * len(columns))
-            if filter_column and filter_value:
-                if filter_column not in columns: raise ValueError("Selected filter column is not in the table")
-                conditions.append(f"CAST(`{filter_column.replace('`','``')}` AS CHAR) LIKE %s"); params.append(f"%{filter_value}%")
-            where = " WHERE " + " AND ".join(conditions) if conditions else ""
-            cur.execute(f"SELECT * FROM `{table.replace('`','``')}`{where} LIMIT 201", tuple(params)); rows = cur.fetchall()
-            return ("browse_rows", table, columns, rows[:200])
-        finally: cur.close(); conn.close()
+        self._launch_database_operation(
+            "browse_rows",
+            {"role": role, "settings": config[role], "table": table,
+             "columns": columns, "search": self.browse_search_all.text(),
+             "filter_column": self.browse_column.currentText(),
+             "filter_value": self.browse_column_value.text()},
+            f"Reading {role}.{table}…",
+        )
 
     def show_browse_rows(self, table: str, columns: list[str], rows: list[tuple]) -> None:
         self.browse_view.clear(); self.browse_view.setColumnCount(len(columns)); self.browse_view.setHorizontalHeaderLabels(columns); self.browse_view.setRowCount(len(rows))

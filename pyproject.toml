@@ -7,7 +7,7 @@ name = "mysql-anonymized-copy"
 version = "0.1.0"
 description = "Copy a MySQL schema while anonymizing configured columns"
 requires-python = ">=3.11"
-dependencies = ["mysql-connector-python>=8.3,<10", "PySide6-Essentials>=6.6,<7"]
+dependencies = ["mysql-connector-python>=8.3,<10", "PySide6-Essentials>=6.6,<7,!=6.12.0"]
 
 [project.scripts]
 mysql-anonymizer = "mysql_anonymizer.cli:main"

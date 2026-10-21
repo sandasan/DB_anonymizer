@@ -14,21 +14,25 @@ from typing import Any
 from .config import connect, load_json, save_json_atomic
 from .copying import (
     CopyPaused,
+    clear_destination_database_data,
     copy_database,
     drop_destination_tables,
     recreate_destination_database,
 )
-from .mappings import list_mapping_fields
+from .mappings import clear_mapping_store, list_mapping_fields
 from .rules import migrate_identifier_rules
 from .schema import inspect_schema, resolve_table_selection
 
 
 class FilePauseEvent:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, parent_pid: int | None = None):
         self.path = path
+        self.parent_pid = parent_pid
 
     def is_set(self) -> bool:
-        return self.path.exists()
+        return self.path.exists() or (
+            self.parent_pid is not None and os.getppid() != self.parent_pid
+        )
 
 
 def _write_private_json(path: Path, value: dict[str, Any]) -> None:
@@ -90,6 +94,142 @@ def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
     return hashlib.sha256(
         json.dumps(structure, sort_keys=True, default=str).encode()
     ).hexdigest()
+
+
+def _database_operation(operation: str, args: dict[str, Any]) -> Any:
+    """Run a short GUI database operation outside the Qt process."""
+    if operation == "inspect":
+        config = args["config"]
+        source = connect(config["source"])
+        try:
+            tables = inspect_schema(source, config["source"]["database"])
+            cursor = source.cursor()
+            cursor.execute(
+                "SELECT TABLE_NAME, TABLE_ROWS, DATA_LENGTH, INDEX_LENGTH "
+                "FROM information_schema.TABLES "
+                "WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'",
+                (config["source"]["database"],),
+            )
+            stats = {
+                row[0]: (row[1], (row[2] or 0) + (row[3] or 0))
+                for row in cursor.fetchall()
+            }
+            cursor.close()
+            for table in tables:
+                table["row_count"], table["size_bytes"] = stats.get(
+                    table["name"], (None, 0)
+                )
+                table["row_count_is_estimate"] = (
+                    str(table.get("engine", "")).lower() == "innodb"
+                )
+        finally:
+            source.close()
+
+        destination_tables: list[str] = []
+        try:
+            dest = connect(config["destination"])
+            try:
+                cursor = dest.cursor()
+                cursor.execute(
+                    "SELECT TABLE_NAME FROM information_schema.TABLES "
+                    "WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'",
+                    (config["destination"]["database"],),
+                )
+                destination_tables = [row[0] for row in cursor.fetchall()]
+                cursor.close()
+            finally:
+                dest.close()
+        except Exception:
+            pass
+        return ["inspection", tables, destination_tables, config]
+
+    if operation == "test_connections":
+        reports = []
+        for role in ("source", "destination"):
+            conn = None
+            try:
+                conn = connect(args["config"][role])
+                reports.append(
+                    f"✓ {role}: connected to {args['config'][role].get('database')}."
+                )
+            except Exception as exc:
+                reports.append(f"✗ {role}: {exc}")
+            finally:
+                if conn is not None:
+                    conn.close()
+        return ["connection_report", "\n\n".join(reports)]
+
+    if operation == "clear_destination":
+        names = clear_destination_database_data(args["destination"], args["source"])
+        count = clear_mapping_store(args["mapping"]) if args.get("mapping") else 0
+        return ["clear", names, count]
+
+    if operation == "browse_tables":
+        role, settings = args["role"], args["settings"]
+        conn = connect(settings)
+        try:
+            return ["browse_tables", role, inspect_schema(conn, settings["database"])]
+        finally:
+            conn.close()
+
+    if operation == "browse_rows":
+        role, settings = args["role"], args["settings"]
+        table, columns = args["table"], args["columns"]
+        conn = connect(settings)
+        cursor = conn.cursor()
+        try:
+            conditions, params = [], []
+            if args["search"]:
+                conditions.append(
+                    "(" + " OR ".join(
+                        f"CAST(`{column.replace('`', '``')}` AS CHAR) LIKE %s"
+                        for column in columns
+                    ) + ")"
+                )
+                params.extend([f"%{args['search']}%"] * len(columns))
+            if args["filter_column"] and args["filter_value"]:
+                if args["filter_column"] not in columns:
+                    raise ValueError("Selected filter column is not in the table")
+                conditions.append(
+                    f"CAST(`{args['filter_column'].replace('`', '``')}` AS CHAR) LIKE %s"
+                )
+                params.append(f"%{args['filter_value']}%")
+            where = " WHERE " + " AND ".join(conditions) if conditions else ""
+            cursor.execute(
+                f"SELECT * FROM `{table.replace('`', '``')}`{where} LIMIT 201",
+                tuple(params),
+            )
+            rows = [
+                [None if value is None else str(value) for value in row]
+                for row in cursor.fetchall()
+            ]
+            return ["browse_rows", table, columns, rows[:200]]
+        finally:
+            cursor.close()
+            conn.close()
+
+    raise ValueError(f"Unknown database operation: {operation}")
+
+
+def run_operation(job_path: Path) -> int:
+    job = load_json(str(job_path))
+    result_path = Path(job["result_path"])
+    error_path = Path(job["error_path"])
+    activity_path = Path(job["activity_path"])
+    try:
+        result = _database_operation(job["operation"], job["args"])
+        _write_private_json(result_path, {"kind": "operation", "result": result})
+        return 0
+    except Exception as exc:
+        details = traceback.format_exc()
+        _write_log(activity_path, f"operation_failed operation={job['operation']}")
+        _write_log(error_path, f"database worker: {exc}\n{details}")
+        _write_private_json(
+            result_path,
+            {"kind": "error", "operation": job["operation"],
+             "message": str(exc), "traceback": details},
+        )
+        return 1
 
 
 def run_job(job_path: Path) -> int:
@@ -203,7 +343,7 @@ def run_job(job_path: Path) -> int:
                 state["include_dependencies"],
                 report,
                 state.get("completed_counts", {}),
-                FilePauseEvent(pause_path),
+                FilePauseEvent(pause_path, job.get("parent_pid")),
                 bool(state.get("is_resume")),
             )
         except CopyPaused as paused:
@@ -253,7 +393,14 @@ def main() -> int:
     if len(sys.argv) != 2:
         print("Usage: python -m mysql_anonymizer.copy_worker JOB.json", file=sys.stderr)
         return 2
-    return run_job(Path(sys.argv[1]))
+    job_path = Path(sys.argv[1])
+    try:
+        if load_json(str(job_path)).get("mode") == "operation":
+            return run_operation(job_path)
+        return run_job(job_path)
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

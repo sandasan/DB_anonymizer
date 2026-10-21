@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any, Callable
 
-import mysql.connector
-
 from .config import connect
 from .mappings import open_mapping_store
 from .rules import validate_rules
@@ -365,7 +363,13 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 try:
                     _executemany_with_packet_limit(dst, insert, output,
                                                    max_allowed_packet, len(names))
-                except mysql.connector.Error as exc:
+                except Exception as exc:
+                    # Importing mysql.connector also loads its optional native
+                    # extension. Keep that import lazy so the Qt process never
+                    # loads it just by importing the application modules.
+                    from mysql.connector import Error as ConnectorError
+                    if not isinstance(exc, ConnectorError):
+                        raise
                     first_row = count + 1
                     last_row = count + len(output)
                     details = []
