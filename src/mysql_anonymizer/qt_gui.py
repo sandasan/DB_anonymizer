@@ -281,6 +281,7 @@ class AnonymizerWindow(QMainWindow):
         scroll.setWidget(body); outer.addWidget(scroll); return self._page_body_layout
 
     def _build_connections(self) -> None:
+        self.hide_copied_check = QCheckBox("Hide copied tables"); self.hide_copied_check.toggled.connect(self.render_tables)
         layout = self._scroll_page(self.connections_tab)
         splitter = QSplitter(Qt.Horizontal)
         for role in ("source", "destination"):
@@ -305,7 +306,7 @@ class AnonymizerWindow(QMainWindow):
         self.recreate_db_btn = QPushButton("Recreate destination DB"); self.recreate_db_btn.clicked.connect(self.recreate_database)
         self.clear_data_btn = QPushButton("Clear destination data"); self.clear_data_btn.clicked.connect(self.clear_destination)
         for widget in (self.select_all_btn, self.clear_selection_btn, self.include_check,
-                       self.allow_locks_check, self.selected_top_check): bar.addWidget(widget)
+                       self.allow_locks_check, self.selected_top_check, self.hide_copied_check): bar.addWidget(widget)
         layout.addLayout(bar)
         danger = QHBoxLayout(); danger.addStretch(1)
         for widget in (self.clear_data_btn, self.recreate_tables_btn, self.recreate_db_btn): danger.addWidget(widget)
@@ -769,6 +770,7 @@ class AnonymizerWindow(QMainWindow):
             cur.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=%s AND TABLE_TYPE='BASE TABLE'", (config["destination"]["database"],))
             destination_tables = {r[0] for r in cur.fetchall()}; cur.close(); dest.close()
         except Exception:
+            if self.hide_copied_check.isChecked() and name in self.copied_tables: continue
             destination_tables = set()
         return ("inspection", tables, destination_tables, config)
 
