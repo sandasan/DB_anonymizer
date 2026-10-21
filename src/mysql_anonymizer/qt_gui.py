@@ -717,10 +717,9 @@ class AnonymizerWindow(QMainWindow):
         if not hasattr(self, "table_view"): return
         selected = set(self.selected_table_names()) | set(self.saved_selection)
         query = self.table_filter.text().casefold() if hasattr(self, "table_filter") else ""
-        self.table_view.blockSignals(True)
-        self.table_view.clear()
         tables = list(self.tables)
         if self.selected_top_check.isChecked(): tables.sort(key=lambda t: (t["name"] not in selected, t["name"].casefold()))
+        items = []
         for table in tables:
             name = table["name"]
             if query and query not in name.casefold(): continue
@@ -731,9 +730,20 @@ class AnonymizerWindow(QMainWindow):
             item = QTreeWidgetItem([mark, name, count_text, "", refs])
             item.setData(1, Qt.UserRole, name)
             item.setData(3, Qt.DisplayRole, size if isinstance(size, (int, float)) else -1)
-            self.table_view.addTopLevelItem(item)
-            if name in selected: item.setSelected(True)
-        self.table_view.blockSignals(False)
+            items.append((item, name in selected))
+        sorting_enabled = self.table_view.isSortingEnabled()
+        self.table_view.blockSignals(True)
+        self.table_view.setUpdatesEnabled(False)
+        self.table_view.setSortingEnabled(False)
+        try:
+            self.table_view.clear()
+            self.table_view.addTopLevelItems([item for item, _ in items])
+            for item, is_selected in items:
+                if is_selected: item.setSelected(True)
+        finally:
+            self.table_view.setSortingEnabled(sorting_enabled)
+            self.table_view.blockSignals(False)
+            self.table_view.setUpdatesEnabled(True)
 
     def _selected_items_changed(self) -> None:
         self.saved_selection = self.selected_table_names(); self.save_state()
