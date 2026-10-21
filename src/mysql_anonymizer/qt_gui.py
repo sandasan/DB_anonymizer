@@ -88,6 +88,7 @@ class TableSizeDelegate(QStyledItemDelegate):
         return str(value)
 
 
+        self._pending_lookup_selection: tuple[str, str] | None = None
 class AnonymizerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -332,6 +333,7 @@ class AnonymizerWindow(QMainWindow):
         controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status); layout.addLayout(controls)
         self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Rule status"])
         self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.lookup_value.textChanged.connect(self._accept_browse_cell_payload)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
         self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"])
@@ -363,6 +365,10 @@ class AnonymizerWindow(QMainWindow):
         self.lookup_table_filter.textChanged.connect(self.filter_lookup_tables); self.lookup_column_filter.textChanged.connect(self.filter_lookup_columns)
         self.lookup_table.currentTextChanged.connect(self.filter_lookup_columns)
         layout.addWidget(QLabel("Searches the selected SQLite mapping store. Matching is exact.")); layout.addStretch(1)
+        copy_cell = QPushButton("Copy selected cell for Lookup")
+        copy_cell.setToolTip("Copy the selected cell with its table and column so it can be pasted into Lookup.")
+        copy_cell.clicked.connect(self.copy_browse_cell_for_lookup)
+        layout.addWidget(copy_cell)
 
     def _build_browse(self) -> None:
         layout = self._scroll_page(self.browse_tab)
@@ -634,7 +640,11 @@ class AnonymizerWindow(QMainWindow):
             self.copy_resume = result[1]; self.pause_event = None; self.pause_btn.setText("Resume copy"); self.pause_btn.setEnabled(True); self.status.setText("Copy paused and checkpoint saved.")
             self.overall_eta.setText("ETA: paused"); self.table_eta.setText("ETA: paused")
             if self.close_when_paused: QTimer.singleShot(0, self.close)
-        elif kind == "lookup_fields": self.mapping_fields = result[1]; self.filter_lookup_tables(); self.log_message(f"Loaded {len(self.mapping_fields)} mapped tables.")
+        elif kind == "lookup_fields":
+            self.mapping_fields = result[1]; self.filter_lookup_tables(); self.log_message(f"Loaded {len(self.mapping_fields)} mapped tables.")
+            if self._pending_lookup_selection is not None:
+                table, column = self._pending_lookup_selection; self._pending_lookup_selection = None
+                self._select_lookup_field(table, column)
         elif kind == "lookup":
             _, direction, table, column, value, matches = result
             self.log_message("\n".join(matches) if matches else f"No matching value found for {table}.{column} = {value!r}.")
@@ -1152,6 +1162,47 @@ class AnonymizerWindow(QMainWindow):
         conn = _connect(role, settings)
         try: return ("browse_tables", role, inspect_schema(conn, settings["database"]))
         finally: conn.close()
+    def copy_browse_cell_for_lookup(self) -> None:
+        row, column = self.browse_view.currentRow(), self.browse_view.currentColumn()
+        item = self.browse_view.item(row, column) if row >= 0 and column >= 0 else None
+        table = self.browse_table.currentText()
+        if item is None or not table:
+            return self.info("Select a data cell", "Select a cell in Browse data first.")
+        payload = {
+            "_mysql_anonymizer_lookup": 1,
+            "table": table,
+            "column": self.browse_view.horizontalHeaderItem(column).text(),
+            "value": item.text(),
+        }
+        QApplication.clipboard().setText(json.dumps(payload, ensure_ascii=False))
+        self.status.setText(f"Copied {table}.{payload['column']} for Lookup.")
+
+    def _accept_browse_cell_payload(self, text: str) -> None:
+        """Expand a Browse cell clipboard payload pasted into the Lookup value field."""
+        try:
+            payload = json.loads(text)
+        except (TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict) or payload.get("_mysql_anonymizer_lookup") != 1:
+            return
+        table, column, value = payload.get("table"), payload.get("column"), payload.get("value")
+        if not all(isinstance(part, str) for part in (table, column, value)):
+            return
+        self._select_lookup_field(table, column)
+        self.lookup_value.setText(value)
+
+    def _select_lookup_field(self, table: str, column: str) -> None:
+        """Select a table and column, updating filters when those fields are available."""
+        if table not in self.mapping_fields:
+            self._pending_lookup_selection = (table, column)
+            self.load_lookup_fields()
+            return
+        self.lookup_table_filter.clear()
+        self.lookup_table.setCurrentText(table)
+        if column in self.mapping_fields.get(table, []):
+            self.lookup_column_filter.clear()
+            self.lookup_column.setCurrentText(column)
+
 
     def filter_browse_tables(self, *_args) -> None:
         if not hasattr(self, "browse_table"): return
