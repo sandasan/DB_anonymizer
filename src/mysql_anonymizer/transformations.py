@@ -18,20 +18,15 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     if value is None:
         return None
     kind = rule["type"]
-    n = stable_number(table, column, value, 10**12)
     if kind == "constant":
         return rule["value"]
     if kind == "email":
         return f"user{stable_number(table, column, value, 10**14)}@example.invalid"
     if kind == "phone":
         return f"+1555{stable_number(table, column, value, 10**7):07d}"
-    if kind == "name":
-        return f"Person{n % 100000000:08d}"
     if kind == "unique":
         digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).hexdigest()
         return f"anon{digest}"
-    if kind == "address":
-        return f"{n % 9999 + 1} Example Street"
     if kind == "ip_address":
         try:
             address = ipaddress.ip_address(str(value).strip())
@@ -43,6 +38,11 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         else:
             replacement = ipaddress.IPv6Address(bytes.fromhex("20010db8") + digest[:12])
         return str(replacement)
+    n = stable_number(table, column, value, 10**12)
+    if kind == "name":
+        return f"Person{n % 100000000:08d}"
+    if kind == "address":
+        return f"{n % 9999 + 1} Example Street"
     if kind == "date_shift":
         delta = timedelta(days=n % 7301 - 3650)
         if isinstance(value, (date, datetime)):

@@ -334,6 +334,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             while rows := src.fetchmany(batch_size):
                 output = []
                 mapping_rows = []
+                mapping_seen: set[tuple[str, str]] = set()
                 for row in rows:
                     values = list(row)
                     for index in set_indexes:
@@ -343,7 +344,10 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                             values[index] = ",".join(sorted(values[index]))
                     for index, col, rule in transform_columns:
                         original_value = values[index]
-                        new_value = transform(original_value, rule, name, col)
+                        if col in unique_state and original_value is not None and original_value in unique_state[col][0]:
+                            new_value = unique_state[col][0][original_value]
+                        else:
+                            new_value = transform(original_value, rule, name, col)
                         if col in unique_state and new_value is not None:
                             mapping, used = unique_state[col]
                             new_value = unique_text(values[index], new_value, name, col,
@@ -351,7 +355,11 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                                                     mapping, used)
                         values[index] = new_value
                         if mapping_db is not None and original_value is not None and new_value is not None:
-                            mapping_rows.append((name, col, str(original_value), str(new_value)))
+                            original_text = str(original_value)
+                            map_key = (col, original_text)
+                            if map_key not in mapping_seen:
+                                mapping_seen.add(map_key)
+                                mapping_rows.append((name, col, original_text, str(new_value)))
                     output.append(tuple(values))
                 try:
                     _executemany_with_packet_limit(dst, insert, output,
@@ -386,11 +394,10 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 # Persist each batch so a graceful pause or application restart can
                 # continue from a durable checkpoint.
                 destination.commit()
-                if mapping_db is not None:
-                    if mapping_rows:
-                        mapping_db.executemany(
-                            "INSERT OR REPLACE INTO mappings VALUES (?, ?, ?, ?)", mapping_rows
-                        )
+                if mapping_db is not None and mapping_rows:
+                    mapping_db.executemany(
+                        "INSERT OR IGNORE INTO mappings VALUES (?, ?, ?, ?)", mapping_rows
+                    )
                     mapping_db.commit()
                 if progress_callback:
                     progress_callback({"event": "batch", "table": name,
