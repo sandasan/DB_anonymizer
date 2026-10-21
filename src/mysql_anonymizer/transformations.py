@@ -56,16 +56,30 @@ def unique_text(value: Any, candidate: Any, table: str, column: str, max_length:
     """Fit an anonymized string to a unique text column and resolve collisions."""
     if value in mapping:
         return mapping[value]
-    candidate = str(candidate)[:max_length]
-    if candidate not in used:
+    candidate = str(candidate)
+    if 0 < len(candidate) <= max_length and candidate not in used:
         mapping[value] = candidate
         used.add(candidate)
         return candidate
+    if max_length < 1:
+        raise ValueError(f"Cannot create a unique anonymized value for {table}.{column} with zero available characters")
+
     # A collision can occur after truncation or with a low-cardinality transform.
-    # Allocate a deterministic hash pseudonym, retrying until it is unused.
-    for attempt in range(100_000):
-        digest = hashlib.sha256(f"{table}\0{column}\0{value}\0{attempt}".encode()).hexdigest()
-        replacement = ("a" + digest)[:max_length]
+    # Encode a deterministic digest in a compact alphabet so even short columns
+    # can hold distinct pseudonyms when their value space permits it.
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    capacity = len(alphabet) ** max_length
+    if len(used) >= capacity:
+        raise ValueError(f"Could not create a unique anonymized value for {table}.{column}; its maximum length may be too short")
+
+    for attempt in range(min(capacity, 100_000)):
+        raw = hashlib.sha256(f"{table}\0{column}\0{value}\0{attempt}".encode()).digest()
+        number = int.from_bytes(raw, "big") % capacity
+        chars = []
+        for _ in range(max_length):
+            number, digit = divmod(number, len(alphabet))
+            chars.append(alphabet[digit])
+        replacement = "".join(reversed(chars))
         if replacement not in used:
             mapping[value] = replacement
             used.add(replacement)

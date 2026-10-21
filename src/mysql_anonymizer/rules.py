@@ -154,7 +154,9 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
             length_match = re.fullmatch(r"(?:var)?char\((\d+)\)", column_type, re.I)
             if length_match and cols[col]["COLUMN_KEY"] != "UNI":
                 max_length = int(length_match.group(1))
-                required_length = _TRANSFORM_MAX_LENGTH.get(kind)
+                # The copier shortens unique pseudonyms to the declared column
+                # width and resolves collisions, including for narrow unique indexes.
+                required_length = None if kind == "unique" else _TRANSFORM_MAX_LENGTH.get(kind)
                 if kind == "constant" and isinstance(rule.get("value"), str):
                     required_length = len(rule["value"])
                 if required_length is not None and required_length > max_length:

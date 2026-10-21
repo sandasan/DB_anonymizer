@@ -327,7 +327,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             unique_state = {
                 col: ({}, set())
                 for col in transforms
-                if column_info[col]["COLUMN_KEY"] == "UNI"
+                if column_info[col]["COLUMN_KEY"] == "UNI" or transforms[col].get("type") == "unique"
             }
             insert = f"INSERT INTO `{name.replace('`', '``')}` ({qcols}) VALUES ({','.join(['%s'] * len(names))})"
             count = 0
