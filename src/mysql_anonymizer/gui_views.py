@@ -34,7 +34,25 @@ class ViewMixin:
         style.configure("Horizontal.TProgressbar", thickness=9, troughcolor="#e0e6ef", background="#3975e8")
 
     def _build_ui(self) -> None:
-        self.main_panes = ttk.PanedWindow(self, orient="vertical")
+        # Put the complete application surface in a canvas so the fixed header
+        # and the selected tab remain reachable on short or scaled displays.
+        self._main_canvas = tk.Canvas(self, highlightthickness=0, borderwidth=0,
+                                      background="#f3f5f8")
+        self._main_scrollbar = ttk.Scrollbar(self, orient="vertical",
+                                             command=self._main_canvas.yview)
+        self._main_canvas.configure(yscrollcommand=self._main_scrollbar.set)
+        self._main_scrollbar.pack(side="right", fill="y")
+        self._main_canvas.pack(side="left", fill="both", expand=True)
+        self._main_content = ttk.Frame(self._main_canvas)
+        self._main_canvas_window = self._main_canvas.create_window(
+            (0, 0), window=self._main_content, anchor="nw")
+        self._main_content.bind("<Configure>", self._main_content_configured)
+        self._main_canvas.bind("<Configure>", self._main_canvas_configured)
+        self.bind_all("<MouseWheel>", self._scroll_main_window, add="+")
+        self.bind_all("<Button-4>", self._scroll_main_window, add="+")
+        self.bind_all("<Button-5>", self._scroll_main_window, add="+")
+
+        self.main_panes = ttk.PanedWindow(self._main_content, orient="vertical")
         self.main_panes.pack(fill="both", expand=True)
         header = ttk.Frame(self.main_panes)
         self.main_panes.add(header, weight=0)
@@ -86,6 +104,12 @@ class ViewMixin:
         self.tabs_widget.add(self.rules_tab, text="Anonymization rules")
         self.tabs_widget.add(self.lookup_tab, text="Lookup")
         self.tabs_widget.add(self.browse_tab, text="Browse data")
+        self._tab_canvases: set[tk.Canvas] = set()
+        self.connection_content = self._make_scrollable_tab(self.connection_tab)
+        self.tables_content = self._make_scrollable_tab(self.tables_tab)
+        self.rules_content = self._make_scrollable_tab(self.rules_tab)
+        self.lookup_content = self._make_scrollable_tab(self.lookup_tab)
+        self.browse_content = self._make_scrollable_tab(self.browse_tab)
         self._build_connections()
         self._build_tables()
         self._build_rules()
@@ -97,6 +121,70 @@ class ViewMixin:
                               font=("TkFixedFont", 9), highlightthickness=1, highlightbackground="#dce2eb")
         self.output.pack(fill="x")
         self.main_panes.add(footer, weight=0)
+
+    def _make_scrollable_tab(self, tab: ttk.Frame) -> ttk.Frame:
+        canvas = tk.Canvas(tab, highlightthickness=0, borderwidth=0, background="white")
+        scrollbar = ttk.Scrollbar(tab, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        content = ttk.Frame(canvas)
+        window = canvas.create_window((0, 0), window=content, anchor="nw")
+        self._tab_canvases.add(canvas)
+
+        def content_changed(_event: tk.Event) -> None:
+            canvas.itemconfigure(window, height=max(canvas.winfo_height(),
+                                                    content.winfo_reqheight(), 850))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def viewport_changed(event: tk.Event) -> None:
+            canvas.itemconfigure(window, width=event.width,
+                                 height=max(event.height, content.winfo_reqheight(), 850))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        content.bind("<Configure>", content_changed)
+        canvas.bind("<Configure>", viewport_changed)
+        return content
+
+    def _main_content_configured(self, _event: tk.Event) -> None:
+        self._main_canvas.configure(scrollregion=self._main_canvas.bbox("all"))
+
+    def _main_canvas_configured(self, event: tk.Event) -> None:
+        self._main_canvas.itemconfigure(self._main_canvas_window, width=event.width)
+        # A canvas window otherwise keeps only its requested height. That
+        # collapses the paned layout to a few hundred pixels and leaves the
+        # rest of the viewport empty. Keep the normal layout height, allowing
+        # the canvas scrollbar to expose it when the actual window is shorter.
+        content_height = max(event.height, self._main_content.winfo_reqheight(), 820)
+        self._main_canvas.itemconfigure(self._main_canvas_window, height=content_height)
+        self._main_canvas.configure(scrollregion=self._main_canvas.bbox("all"))
+
+    def _scroll_main_window(self, event: tk.Event) -> str | None:
+        # Let text editors and data tables keep their own wheel behavior.
+        widget = self.winfo_containing(event.x_root, event.y_root)
+        if widget is None:
+            return None
+        if isinstance(widget, (tk.Text, ttk.Treeview)):
+            return None
+        target_canvas = self._main_canvas
+        current = widget
+        while current is not None and current is not self:
+            if current in self._tab_canvases:
+                target_canvas = current
+                break
+            current = getattr(current, "master", None)
+        if getattr(event, "num", None) == 4:
+            delta = -1
+        elif getattr(event, "num", None) == 5:
+            delta = 1
+        else:
+            delta = -int(event.delta / 120) if event.delta else 0
+            if not delta and event.delta:
+                delta = -1 if event.delta > 0 else 1
+        if delta:
+            target_canvas.yview_scroll(delta, "units")
+            return "break"
+        return None
 
     def _config_path_row(self, parent: ttk.Frame, row: int) -> None:
         ttk.Label(parent, text="Config", width=22).grid(row=row, column=0, sticky="w", pady=2)
@@ -133,7 +221,7 @@ class ViewMixin:
         parent.columnconfigure(1, weight=1)
 
     def _build_connections(self) -> None:
-        panes = ttk.PanedWindow(self.connection_tab, orient="horizontal")
+        panes = ttk.PanedWindow(self.connection_content, orient="horizontal")
         panes.pack(fill="both", expand=True)
         for role in ("source", "destination"):
             frame = ttk.LabelFrame(panes, text=role.title(), padding=12)
@@ -156,7 +244,7 @@ class ViewMixin:
             self.connection_fields[role] = fields
 
     def _build_tables(self) -> None:
-        toolbar = ttk.Frame(self.tables_tab)
+        toolbar = ttk.Frame(self.tables_content)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Select all", command=self._select_all).pack(side="left")
         ttk.Button(toolbar, text="Clear selection", command=self._clear_selection).pack(side="left", padx=8)
@@ -182,7 +270,7 @@ class ViewMixin:
             toolbar, text="Show selected tables at top", variable=self.selected_tables_on_top,
             command=self._render_source_tables,
         ).pack(side="left", padx=12)
-        filter_bar = ttk.Frame(self.tables_tab)
+        filter_bar = ttk.Frame(self.tables_content)
         filter_bar.pack(fill="x", pady=(0, 6))
         ttk.Label(filter_bar, text="Filter tables").pack(side="left")
         self.table_filter = tk.StringVar()
@@ -204,7 +292,7 @@ class ViewMixin:
         self.table_sort_reverse = False
         self._table_heading_labels = {}
         self._table_selected_names: set[str] = set()
-        body = ttk.Frame(self.tables_tab)
+        body = ttk.Frame(self.tables_content)
         body.pack(fill="both", expand=True)
         self.table_list = ttk.Treeview(
             body, columns=("status", "table", "records", "size", "eta", "references"),
@@ -230,15 +318,15 @@ class ViewMixin:
         xscroll.grid(row=1, column=0, sticky="ew")
         body.rowconfigure(0, weight=1)
         body.columnconfigure(0, weight=1)
-        ttk.Label(self.tables_tab, text="✓ marks tables present in the destination; ↻ marks tables recreated by this session. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
+        ttk.Label(self.tables_content, text="✓ marks tables present in the destination; ↻ marks tables recreated by this session. Foreign-key dependencies are validated before copy.").pack(anchor="w", pady=(8, 0))
 
     def _build_rules(self) -> None:
-        toolbar = ttk.Frame(self.rules_tab)
+        toolbar = ttk.Frame(self.rules_content)
         toolbar.pack(fill="x", pady=(0, 8))
         ttk.Button(toolbar, text="Load rules", command=self._load_rules).pack(side="left")
         ttk.Button(toolbar, text="Generate rules from schema", command=self._generate_rules).pack(side="left", padx=8)
         ttk.Button(toolbar, text="Save rules", command=self._save_rules).pack(side="left")
-        filters = ttk.Frame(self.rules_tab)
+        filters = ttk.Frame(self.rules_content)
         filters.pack(fill="x", pady=(0, 6))
         ttk.Label(filters, text="Search").pack(side="left")
         self.rules_search = tk.StringVar()
@@ -263,7 +351,7 @@ class ViewMixin:
         self.rules_status_filter_box.bind("<<ComboboxSelected>>", lambda _event: self._refresh_rules_preview())
         ttk.Button(filters, text="Reset filters", command=self._reset_rules_filters).pack(side="left", padx=(8, 0))
         self.rules_search.trace_add("write", lambda *_args: self._refresh_rules_preview())
-        rule_panes = ttk.PanedWindow(self.rules_tab, orient="vertical")
+        rule_panes = ttk.PanedWindow(self.rules_content, orient="vertical")
         rule_panes.pack(fill="both", expand=True)
         preview_panel = ttk.Frame(rule_panes)
         rule_panes.add(preview_panel, weight=1)
@@ -546,7 +634,7 @@ class ViewMixin:
         self.lookup_value = tk.StringVar()
         self.lookup_direction = tk.StringVar(value="original-to-anonymized")
         self.lookup_fields_by_table: dict[str, list[str]] = {}
-        form = ttk.Frame(self.lookup_tab)
+        form = ttk.Frame(self.lookup_content)
         form.pack(anchor="nw", fill="x")
         ttk.Label(form, text="Filter tables", width=18).grid(row=0, column=0, sticky="w", pady=6)
         ttk.Entry(form, textvariable=self.lookup_table_filter).grid(row=0, column=1, sticky="ew", pady=6)
@@ -588,7 +676,7 @@ class ViewMixin:
         ttk.Button(lookup_buttons, text="Reset filters", command=self._reset_lookup_filters).pack(side="left", padx=(8, 0))
         self.lookup_table_filter.trace_add("write", lambda *_args: self._filter_lookup_tables())
         self.lookup_column_filter.trace_add("write", lambda *_args: self._filter_lookup_columns())
-        ttk.Label(self.lookup_tab,
+        ttk.Label(self.lookup_content,
                   text="Uses the SQLite mapping store selected above. Search is exact and may return multiple values.",
                   wraplength=760).pack(anchor="w", pady=(16, 0))
 
@@ -602,7 +690,7 @@ class ViewMixin:
         self.browse_tables_by_role: dict[str, list[dict[str, Any]]] = {}
         self.browse_raw_values: dict[str, tuple[Any, ...]] = {}
         self.browse_copy_target: tuple[str, int] | None = None
-        browse_panes = ttk.PanedWindow(self.browse_tab, orient="vertical")
+        browse_panes = ttk.PanedWindow(self.browse_content, orient="vertical")
         browse_panes.pack(fill="both", expand=True)
         controls = ttk.Frame(browse_panes)
         browse_panes.add(controls, weight=0)
