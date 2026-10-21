@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import threading
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
@@ -54,7 +56,7 @@ def _connect(role: str, settings: dict[str, Any]):
 class TaskSignals(QObject):
     progress = Signal(object)
     result = Signal(object)
-    error = Signal(str)
+    error = Signal(str, str, str)
     finished = Signal()
 
 
@@ -69,7 +71,8 @@ class Task(QRunnable):
             self.signals.result.emit(self.operation(*self.args, progress=self.signals.progress.emit,
                                                     **self.kwargs))
         except Exception as exc:
-            self.signals.error.emit(str(exc))
+            self.signals.error.emit(getattr(self.operation, "__name__", type(self.operation).__name__),
+                                    str(exc), traceback.format_exc())
         finally:
             self.signals.finished.emit()
 
@@ -116,6 +119,10 @@ class AnonymizerWindow(QMainWindow):
     @classmethod
     def _checkpoint_path(cls) -> Path:
         return cls._state_file().with_name("copy_resume.json")
+
+    @classmethod
+    def _error_log_path(cls) -> Path:
+        return cls._state_file().with_name("gui_errors.log")
 
     def _init_paths(self) -> None:
         self.config_path = "config.json"
@@ -516,8 +523,22 @@ class AnonymizerWindow(QMainWindow):
         if self.close_when_paused:
             QTimer.singleShot(0, self.close)
 
-    def on_error(self, message: str) -> None:
+    def on_error(self, operation: str, message: str, traceback_text: str) -> None:
         self.status.setText("Operation failed."); self.log_message("Error: " + message)
+        log_path = self._error_log_path()
+        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        entry = (f"[{timestamp}] {operation}: {message}\n{traceback_text.rstrip()}\n\n")
+        try:
+            log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try: log_path.parent.chmod(0o700)
+            except OSError: pass
+            with log_path.open("a", encoding="utf-8") as log_file:
+                os.chmod(log_path, 0o600)
+                log_file.write(entry)
+        except OSError as exc:
+            self.log_message(f"Could not write traceback log: {exc}")
+        else:
+            self.log_message(f"Traceback saved to {log_path}")
         if self.copy_resume is not None:
             self.pause_event = None; self.pause_btn.setText("Resume copy"); self.pause_btn.setEnabled(True)
         if self.close_when_paused: QTimer.singleShot(0, self.close)
