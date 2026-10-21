@@ -221,13 +221,18 @@ class AnonymizerWindow(QMainWindow):
         actions.addWidget(self.auto_check); actions.addStretch(1); actions.addWidget(self.pause_btn); actions.addWidget(self.copy_btn)
         root.addLayout(actions)
         self.overall_title = QLabel("Overall progress")
+        self.overall_eta = QLabel("ETA: —")
         self.overall_progress = QProgressBar(); self.overall_progress.setRange(0, 1000)
         self.table_title = QLabel("Current table")
         self.table_eta = QLabel("ETA: —")
         self.table_progress = QProgressBar(); self.table_progress.setRange(0, 1000)
+        self._overall_started_at: float | None = None
+        self._overall_initial_rows = 0
+        self._overall_initial_tables = 0
         self._table_started_at: float | None = None
         self.status = QLabel("Load connection settings, then inspect the source.")
-        root.addWidget(self.overall_title); root.addWidget(self.overall_progress)
+        root.addWidget(self.overall_title); root.addWidget(self.overall_eta)
+        root.addWidget(self.overall_progress)
         root.addWidget(self.table_title); root.addWidget(self.table_eta)
         root.addWidget(self.table_progress); root.addWidget(self.status)
 
@@ -591,6 +596,8 @@ class AnonymizerWindow(QMainWindow):
         else:
             self.log_message(f"Traceback saved to {log_path}")
         if self.copy_resume is not None:
+            self.overall_eta.setText("ETA: unavailable; resume available")
+            self.table_eta.setText("ETA: unavailable; resume available")
             self.pause_event = None; self.pause_btn.setText("Resume copy"); self.pause_btn.setEnabled(True)
         if self.close_when_paused: QTimer.singleShot(0, self.close)
         self.error("Operation failed", message)
@@ -609,12 +616,15 @@ class AnonymizerWindow(QMainWindow):
         elif kind == "connection_report": self.log_message(result[1]); self.info("Connection test", result[1])
         elif kind == "copy":
             _, counts, names, fields, identity = result; self.copied_tables.update(names); self.destination_tables.update(names); self.render_tables(); self.copy_resume = None; self.pause_event = None; self.pause_btn.setText("Pause copy"); self.log_message("Copy complete.\n" + "\n".join(f"  {k}: {v} rows" for k,v in counts.items())); self.status.setText("Copy complete.")
+            self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(1000)
+            self.overall_eta.setText("ETA: complete"); self.table_eta.setText("ETA: complete")
             self.copied_destination_identity = identity
             self.save_state()
             if fields is not None: self.mapping_fields = fields; self.filter_lookup_tables()
             if self.close_when_paused: QTimer.singleShot(0, self.close)
         elif kind == "paused":
             self.copy_resume = result[1]; self.pause_event = None; self.pause_btn.setText("Resume copy"); self.pause_btn.setEnabled(True); self.status.setText("Copy paused and checkpoint saved.")
+            self.overall_eta.setText("ETA: paused"); self.table_eta.setText("ETA: paused")
             if self.close_when_paused: QTimer.singleShot(0, self.close)
         elif kind == "lookup_fields": self.mapping_fields = result[1]; self.filter_lookup_tables(); self.log_message(f"Loaded {len(self.mapping_fields)} mapped tables.")
         elif kind == "lookup":
@@ -630,17 +640,50 @@ class AnonymizerWindow(QMainWindow):
         if event == "inspect":
             self.status.setText(value.get("status", "Inspecting source…")); return
         if event == "copy_started":
+            self._overall_started_at = None
+            self._overall_initial_rows = 0
+            self._overall_initial_tables = 0
+            self.overall_eta.setText("ETA: estimating…")
             self._table_started_at = None
             self.table_eta.setText("ETA: waiting for first table")
             self.overall_progress.setRange(0, 0); self.table_progress.setRange(0, 0); return
         if event == "copy_finished":
             self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(1000)
             self.table_progress.setRange(0, 1000); self.table_progress.setValue(1000)
-            self.table_eta.setText("ETA: complete")
+            self.overall_eta.setText("ETA: complete"); self.table_eta.setText("ETA: complete")
             return
         total = value.get("total_tables") or 0; complete = value.get("completed_tables") or 0
-        if total:
-            self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(int(1000 * complete / total))
+        total_rows = value.get("total_rows") or 0
+        completed_rows = value.get("completed_rows") or 0
+        if event == "start":
+            self._overall_started_at = time.monotonic()
+            self._overall_initial_rows = completed_rows
+            self._overall_initial_tables = complete
+        if total_rows:
+            overall_fraction = completed_rows / total_rows
+        elif total:
+            overall_fraction = complete / total
+        else:
+            overall_fraction = 0
+        self.overall_progress.setRange(0, 1000)
+        self.overall_progress.setValue(max(0, min(1000, int(1000 * overall_fraction))))
+        if event == "start":
+            self.overall_eta.setText("ETA: complete" if overall_fraction >= 1 else "ETA: estimating…")
+        elif overall_fraction >= 1:
+            self.overall_eta.setText("ETA: complete")
+        elif self._overall_started_at is not None:
+            elapsed = time.monotonic() - self._overall_started_at
+            if total_rows:
+                progressed = completed_rows - self._overall_initial_rows
+                remaining = max(0, total_rows - completed_rows)
+            else:
+                progressed = complete - self._overall_initial_tables
+                remaining = max(0, total - complete)
+            if progressed > 0 and elapsed > 0:
+                eta_seconds = elapsed * remaining / progressed
+                self.overall_eta.setText(f"ETA: about {self._format_duration(eta_seconds)}")
+            else:
+                self.overall_eta.setText("ETA: estimating…")
         rows, copied = value.get("table_rows") or 0, value.get("copied_rows") or 0
         if event == "table":
             self._table_started_at = time.monotonic()
@@ -825,6 +868,7 @@ class AnonymizerWindow(QMainWindow):
 
     def _copy_worker(self, state: dict[str, Any], pause_event: threading.Event, progress: Callable) -> tuple:
         config, rules = state["config"], state["rules"]; source = _connect("source", config["source"]); destination = None
+        progress({"event": "copy_started"})
         try:
             tables = inspect_schema(source, config["source"]["database"])
             snapshot = self.inspection_snapshot

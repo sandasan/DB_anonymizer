@@ -309,7 +309,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 progress_callback({"event": "table", "table": name,
                                    "table_index": table_positions[name], "total_tables": len(tables),
                                    "table_rows": row_totals[name], "copied_rows": 0,
-                                   "total_rows": total_rows, "completed_rows": sum(counts.values())})
+                                   "total_rows": total_rows, "completed_rows": sum(counts.values()),
+                                   "completed_tables": len(counts)})
             cols = [c for c in t["columns"] if "GENERATED" not in c["EXTRA"].upper()]
             names = [c["COLUMN_NAME"] for c in cols]
             qcols = ",".join(f"`{c.replace('`', '``')}`" for c in names)
@@ -404,7 +405,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                                        "table_index": table_positions[name], "total_tables": len(tables),
                                        "table_rows": row_totals[name], "copied_rows": count,
                                        "total_rows": total_rows,
-                                       "completed_rows": sum(counts.values()) + count})
+                                       "completed_rows": sum(counts.values()) + count,
+                                       "completed_tables": len(counts)})
                 if pause_event is not None and pause_event.is_set() and count < row_totals[name]:
                     raise CopyPaused(counts, name, [table["name"] for table in tables])
             counts[name] = count
