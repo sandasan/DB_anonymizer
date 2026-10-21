@@ -6,6 +6,7 @@ import copy
 import faulthandler
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -27,11 +28,9 @@ from PySide6.QtWidgets import (
 
 from .cli import check_config
 from .core import (
-    CopyPaused, clear_destination_database_data, clear_mapping_store, connect,
-    copy_database, drop_destination_tables, init_rules, inspect_schema,
-    list_mapping_fields, load_json, lookup_mapping, migrate_identifier_rules,
-    open_mapping_store, prune_rules_to_schema, recreate_destination_database,
-    resolve_table_selection, save_json_atomic,
+    clear_destination_database_data, clear_mapping_store, connect, inspect_schema,
+    list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
+    save_json_atomic,
 )
 
 
@@ -97,6 +96,11 @@ class AnonymizerWindow(QMainWindow):
         self.setMinimumSize(760, 560)
         self.pool = QThreadPool.globalInstance()
         self._active_task: Task | None = None
+        self._copy_progress_timer: QTimer | None = None
+        self._copy_process: subprocess.Popen | None = None
+        self._copy_worker_paths: dict[str, Path] | None = None
+        self._copy_stderr_handle = None
+        self._copy_progress_mtime_ns: int | None = None
         self.busy = False
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
@@ -583,6 +587,10 @@ class AnonymizerWindow(QMainWindow):
     def on_finished(self) -> None:
         self.busy = False; self._set_busy(False)
         self._active_task = None
+        if self._copy_progress_timer is not None:
+            self._copy_progress_timer.stop()
+            self._copy_progress_timer.deleteLater()
+            self._copy_progress_timer = None
         if self.close_when_paused:
             QTimer.singleShot(0, self.close)
 
@@ -616,7 +624,7 @@ class AnonymizerWindow(QMainWindow):
         elif kind == "connection_report": self.log_message(result[1]); self.info("Connection test", result[1])
         elif kind == "copy":
             _, counts, names, fields, identity = result; self.copied_tables.update(names); self.destination_tables.update(names); self.render_tables(); self.copy_resume = None; self.pause_event = None; self.pause_btn.setText("Pause copy"); self.log_message("Copy complete.\n" + "\n".join(f"  {k}: {v} rows" for k,v in counts.items())); self.status.setText("Copy complete.")
-            self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(1000)
+            self.overall_progress.setValue(1000)
             self.overall_eta.setText("ETA: complete"); self.table_eta.setText("ETA: complete")
             self.copied_destination_identity = identity
             self.save_state()
@@ -646,10 +654,13 @@ class AnonymizerWindow(QMainWindow):
             self.overall_eta.setText("ETA: estimating…")
             self._table_started_at = None
             self.table_eta.setText("ETA: waiting for first table")
-            self.overall_progress.setRange(0, 0); self.table_progress.setRange(0, 0); return
+            # Keep determinate ranges stable during copying. Repeatedly changing
+            # QProgressBar ranges from the polling callback triggered a PySide
+            # refcount crash in long copy sessions.
+            self.overall_progress.setValue(0); self.table_progress.setValue(0); return
         if event == "copy_finished":
-            self.overall_progress.setRange(0, 1000); self.overall_progress.setValue(1000)
-            self.table_progress.setRange(0, 1000); self.table_progress.setValue(1000)
+            self.overall_progress.setValue(1000)
+            self.table_progress.setValue(1000)
             self.overall_eta.setText("ETA: complete"); self.table_eta.setText("ETA: complete")
             return
         total = value.get("total_tables") or 0; complete = value.get("completed_tables") or 0
@@ -665,7 +676,6 @@ class AnonymizerWindow(QMainWindow):
             overall_fraction = complete / total
         else:
             overall_fraction = 0
-        self.overall_progress.setRange(0, 1000)
         self.overall_progress.setValue(max(0, min(1000, int(1000 * overall_fraction))))
         if event == "start":
             self.overall_eta.setText("ETA: complete" if overall_fraction >= 1 else "ETA: estimating…")
@@ -697,7 +707,7 @@ class AnonymizerWindow(QMainWindow):
         elif event == "table_done":
             self.table_eta.setText("ETA: complete")
         if rows:
-            self.table_progress.setRange(0, 1000); self.table_progress.setValue(int(1000 * copied / rows))
+            self.table_progress.setValue(max(0, min(1000, int(1000 * copied / rows))))
         self.status.setText(f"{value.get('table', 'Copying')} — {copied:,}/{rows:,} rows" if rows else str(value.get("event", "Working…")))
 
     @staticmethod
@@ -864,79 +874,131 @@ class AnonymizerWindow(QMainWindow):
         p = self._checkpoint_path(); p.parent.mkdir(mode=0o700, parents=True, exist_ok=True); save_json_atomic(str(p), state); p.chmod(0o600)
 
     def _launch_copy(self, state: dict[str, Any]) -> None:
-        self.run_task("Copying selected tables…", self._copy_worker, state, self.pause_event)
+        checkpoint = self._checkpoint_path()
+        paths = {
+            "checkpoint_path": checkpoint,
+            "progress_path": checkpoint.with_name("copy_progress.json"),
+            "result_path": checkpoint.with_name("copy_result.json"),
+            "pause_path": checkpoint.with_name("copy_pause.request"),
+            "job_path": checkpoint.with_name("copy_worker_job.json"),
+            "activity_path": self._activity_log_path(),
+            "error_path": self._error_log_path(),
+        }
+        for key in ("progress_path", "result_path", "pause_path", "job_path"):
+            paths[key].unlink(missing_ok=True)
+        job = {
+            key: str(paths[key])
+            for key in (
+                "checkpoint_path",
+                "progress_path",
+                "result_path",
+                "pause_path",
+                "activity_path",
+                "error_path",
+            )
+        }
+        job["inspection_snapshot"] = self.inspection_snapshot
+        save_json_atomic(str(paths["job_path"]), job)
+        paths["job_path"].chmod(0o600)
+        self._copy_worker_paths = paths
+        self._copy_progress_mtime_ns = None
+        self._copy_progress_timer = QTimer(self)
+        self._copy_progress_timer.setInterval(250)
+        self._copy_progress_timer.timeout.connect(self._poll_copy_progress)
+        self._copy_progress_timer.start()
+        self.busy = True
+        self._set_busy(True)
+        self.status.setText("Copying selected tables…")
+        self.overall_eta.setText("ETA: estimating…")
+        self.table_eta.setText("ETA: waiting for first table")
+        self.overall_progress.setValue(0)
+        self.table_progress.setValue(0)
+        self.pause_btn.setText("Pause copy")
+        self.pause_btn.setEnabled(True)
 
-    def _copy_worker(self, state: dict[str, Any], pause_event: threading.Event, progress: Callable) -> tuple:
-        config, rules = state["config"], state["rules"]; source = _connect("source", config["source"]); destination = None
-        progress({"event": "copy_started"})
         try:
-            tables = inspect_schema(source, config["source"]["database"])
-            snapshot = self.inspection_snapshot
-            if not state.get("is_resume") and snapshot and (
-                snapshot.get("source") != self.source_identity(config)
-                or snapshot.get("fingerprint") != self.schema_fingerprint(tables)
-            ):
-                raise ValueError("The source schema changed since inspection. Inspect the source again before copying.")
-            moved = migrate_identifier_rules(rules, tables)
-            if moved and state.get("rules_path"): save_json_atomic(state["rules_path"], rules)
-            action = state.get("recreate_action", "copy")
-            if action == "recreate_database" and not state.get("is_resume"): recreate_destination_database(config["destination"], config["source"])
-            destination = _connect("destination", config["destination"])
-            self._write_activity_log(f"copy_connection source_driver={type(source).__name__}")
-            self._write_activity_log(f"copy_connection destination_driver={type(destination).__name__}")
-            if action == "replace_tables" and not state.get("is_resume"):
-                cur = destination.cursor(); cur.execute("SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE()")
-                existing = {r[0] for r in cur.fetchall()}; cur.close()
-                resolve_table_selection(tables, state["selected"], state["include_dependencies"], existing - set(state["selected"]))
-                drop_destination_tables(destination, state["selected"])
-            def report(item: dict[str, Any]) -> None:
-                nonlocal last_activity_log, last_logged_batch_table
-                if item.get("event") == "start" and not state.get("is_resume"):
-                    state["is_resume"] = True; state["selected"] = item.get("selected_tables", state["selected"]); self.write_checkpoint(state)
-                elif item.get("event") == "table_done":
-                    counts = dict(state.get("completed_counts", {})); counts[item["table"]] = item["copied_rows"]; state["completed_counts"] = counts; self.write_checkpoint(state)
-                event = item.get("event")
-                now = time.monotonic()
-                log_batch = event == "batch" and (
-                    item.get("table") != last_logged_batch_table
-                    or now - last_activity_log >= 2
+            log_path = paths["error_path"]
+            log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try:
+                log_path.parent.chmod(0o700)
+            except OSError:
+                pass
+            self._copy_stderr_handle = log_path.open("a", encoding="utf-8", buffering=1)
+            os.chmod(log_path, 0o600)
+            self._copy_process = subprocess.Popen(
+                [sys.executable, "-m", "mysql_anonymizer.copy_worker", str(paths["job_path"])],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=self._copy_stderr_handle,
+            )
+            self._write_activity_log(f"copy_worker pid={self._copy_process.pid}")
+        except Exception as exc:
+            self._copy_process = None
+            if self._copy_stderr_handle is not None:
+                self._copy_stderr_handle.close()
+                self._copy_stderr_handle = None
+            self.on_error("copy", str(exc), traceback.format_exc())
+            self.on_finished()
+
+    def _poll_copy_progress(self) -> None:
+        paths = self._copy_worker_paths
+        if paths is None:
+            return
+        progress_path = paths["progress_path"]
+        try:
+            modified = progress_path.stat().st_mtime_ns
+            if modified != self._copy_progress_mtime_ns:
+                progress = json.loads(progress_path.read_text(encoding="utf-8"))
+                self._copy_progress_mtime_ns = modified
+                self.on_progress(progress)
+        except (OSError, json.JSONDecodeError):
+            pass
+
+        process = self._copy_process
+        if process is None or process.poll() is None:
+            return
+
+        self._copy_process = None
+        if self._copy_progress_timer is not None:
+            self._copy_progress_timer.stop()
+            self._copy_progress_timer.deleteLater()
+            self._copy_progress_timer = None
+        if self._copy_stderr_handle is not None:
+            self._copy_stderr_handle.close()
+            self._copy_stderr_handle = None
+        try:
+            result = json.loads(paths["result_path"].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            result = None
+
+        if result and result.get("kind") == "copy":
+            counts = result["counts"]
+            self.on_result(("copy", counts, set(counts), result.get("fields"), tuple(result["identity"])))
+        elif result and result.get("kind") == "paused":
+            self.on_result(("paused", result["state"]))
+        else:
+            try:
+                self.copy_resume = load_json(str(paths["checkpoint_path"]))
+            except (OSError, json.JSONDecodeError):
+                pass
+            if result and result.get("kind") == "error":
+                self.on_error("copy", result.get("message", "Copy failed."), result.get("traceback", ""))
+            else:
+                message = (
+                    f"Copy worker exited unexpectedly (exit code {process.returncode}). "
+                    f"The saved checkpoint is available to resume. Diagnostics: {paths['error_path']}"
                 )
-                if event in {"start", "table", "table_done"} or log_batch:
-                    rss_mb = self._process_rss_mb()
-                    memory = f" rss_mb={rss_mb:.1f}" if rss_mb is not None else ""
-                    detail = (
-                        f" event={event} table={item.get('table', '-')!r}"
-                        f" copied_rows={item.get('copied_rows', 0)}"
-                        f" table_rows={item.get('table_rows', 0)}"
-                        f" completed_tables={item.get('completed_tables', len(state.get('completed_counts', {})))}"
-                        f" total_tables={item.get('total_tables', 0)}"
-                        f"{memory}"
-                    )
-                    self._write_activity_log(f"copy_progress{detail}")
-                    last_activity_log = now
-                    if event == "batch":
-                        last_logged_batch_table = item.get("table")
-                progress(item)
-            last_activity_log = time.monotonic()
-            last_logged_batch_table = None
-            counts = copy_database(source, destination, config["source"]["database"], rules, config.get("batch_size", 2000), state["allow_locks"], state["mapping_path"], state["selected"], state["include_dependencies"], report, state.get("completed_counts", {}), pause_event, bool(state.get("is_resume")))
-            self._write_activity_log(f"copy_finished tables={len(counts)}")
-            self._checkpoint_path().unlink(missing_ok=True)
-            try: fields = list_mapping_fields(state["mapping_path"]) if state.get("mapping_path") else None
-            except Exception: fields = None
-            return ("copy", counts, set(counts), fields, self.destination_identity(config))
-        except CopyPaused as paused:
-            state["completed_counts"] = paused.completed_counts; state["selected"] = paused.selected_tables; state["is_resume"] = True; state["paused_table"] = paused.current_table; self.write_checkpoint(state)
-            return ("paused", state)
-        finally:
-            if destination: destination.close()
-            source.close()
+                self.on_error("copy worker", message, message)
+        self.on_finished()
 
     def pause_or_resume(self) -> None:
         if self.copy_resume and self.pause_event is None:
             state = self.copy_resume; self.pause_event = threading.Event(); self.pause_btn.setText("Pause copy"); self._launch_copy(state)
         elif self.pause_event:
-            self.pause_event.set(); self.pause_btn.setEnabled(False); self.status.setText("Pausing after the current batch…")
+            self.pause_event.set()
+            if self._copy_worker_paths is not None:
+                self._copy_worker_paths["pause_path"].touch(mode=0o600, exist_ok=True)
+            self.pause_btn.setEnabled(False); self.status.setText("Pausing after the current batch…")
 
     def _offer_resume(self) -> None:
         try:
@@ -1137,7 +1199,10 @@ class AnonymizerWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         if self.pause_event is not None and self.copy_resume:
             self.close_when_paused = True
-            self.pause_event.set(); event.ignore(); self.status.setText("Pausing at the next batch boundary before closing…")
+            self.pause_event.set()
+            if self._copy_worker_paths is not None:
+                self._copy_worker_paths["pause_path"].touch(mode=0o600, exist_ok=True)
+            event.ignore(); self.status.setText("Pausing at the next batch boundary before closing…")
             return
         if self.busy:
             self.close_when_paused = True; event.ignore(); self.status.setText("Waiting for the current operation before closing…")
@@ -1163,7 +1228,10 @@ def main() -> None:
         crash_log = log_path.open("a", encoding="utf-8", buffering=1)
         os.chmod(log_path, 0o600)
         # Keep the descriptor alive for faulthandler so native crashes also leave
-        # Python thread stacks in the same private diagnostic log.
+        # Python thread stacks in the same private diagnostic log. Route stderr
+        # there too because CPython fatal errors write their report directly to
+        # file descriptor 2 instead of calling sys.excepthook.
+        os.dup2(crash_log.fileno(), 2)
         faulthandler.enable(file=crash_log, all_threads=True)
     except (OSError, RuntimeError, ValueError):
         crash_log = None
@@ -1180,6 +1248,8 @@ def main() -> None:
             window.log_message(f"Diagnostic log: {log_path}")
             if window.pause_event is not None:
                 window.pause_event.set()
+                if window._copy_worker_paths is not None:
+                    window._copy_worker_paths["pause_path"].touch(mode=0o600, exist_ok=True)
             QTimer.singleShot(0, lambda: window.error(
                 "Unexpected application error",
                 f"The operation was stopped at a safe batch boundary where possible. Diagnostics were saved to:\n{log_path}\n\n{message}"
