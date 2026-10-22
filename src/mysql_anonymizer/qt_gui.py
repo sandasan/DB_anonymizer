@@ -16,12 +16,12 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
+from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, QDateTime
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog,
+    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit,
     QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -278,7 +278,8 @@ class AnonymizerWindow(QMainWindow):
         bar = QHBoxLayout()
         self.select_all_btn = QPushButton("Select all"); self.select_all_btn.clicked.connect(lambda: self.table_view.selectAll())
         self.clear_selection_btn = QPushButton("Clear selection"); self.clear_selection_btn.clicked.connect(lambda: self.table_view.clearSelection())
-        self.include_check = QCheckBox("Include referenced tables automatically"); self.include_check.setChecked(True)
+        self.include_check = QCheckBox("Select directly related tables automatically"); self.include_check.setChecked(True)
+        self.include_check.setToolTip("Also select tables referenced by the selection and tables that reference it.")
         self.allow_locks_check = QCheckBox("Allow source table locks for non-InnoDB")
         self.selected_top_check = QCheckBox("Show selected tables at top"); self.selected_top_check.toggled.connect(self.render_tables)
         self.hide_copied_check = QCheckBox("Hide copied tables"); self.hide_copied_check.toggled.connect(self.render_tables)
@@ -288,6 +289,23 @@ class AnonymizerWindow(QMainWindow):
         for widget in (self.select_all_btn, self.clear_selection_btn, self.include_check,
                        self.allow_locks_check, self.selected_top_check, self.hide_copied_check): bar.addWidget(widget)
         layout.addLayout(bar)
+        range_box = QGroupBox("Copy a date/time range and its related rows")
+        range_layout = QGridLayout(range_box)
+        self.date_range_check = QCheckBox("Enable relationship-preserving date range")
+        self.date_range_check.setEnabled(False)
+        self.date_range_check.toggled.connect(self._date_range_toggled)
+        self.date_range_start = QDateTimeEdit(QDateTime.currentDateTime().addDays(-7)); self.date_range_start.setCalendarPopup(True)
+        self.date_range_end = QDateTimeEdit(QDateTime.currentDateTime()); self.date_range_end.setCalendarPopup(True)
+        for edit in (self.date_range_start, self.date_range_end):
+            edit.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            edit.setToolTip("Set both the date and time. Edit the time with the keyboard or the field controls.")
+        range_layout.addWidget(self.date_range_check, 0, 0, 1, 4)
+        range_layout.addWidget(QLabel("Start date and time (inclusive)"), 1, 0); range_layout.addWidget(self.date_range_start, 1, 1)
+        range_layout.addWidget(QLabel("End date and time (inclusive)"), 1, 2); range_layout.addWidget(self.date_range_end, 1, 3)
+        range_layout.addWidget(QLabel("Every checked table with date/time columns uses this interval; checked tables without them are copied in full. The app follows their foreign keys to required parent rows. Check child tables you want included; other child tables are not scanned."), 2, 0, 1, 4)
+        layout.addWidget(range_box)
+        self._date_range_controls = (self.date_range_start, self.date_range_end)
+        self._date_range_toggled(False)
         danger = QHBoxLayout(); danger.addStretch(1)
         for widget in (self.clear_data_btn, self.recreate_tables_btn, self.recreate_db_btn): danger.addWidget(widget)
         layout.addLayout(danger)
@@ -604,12 +622,23 @@ class AnonymizerWindow(QMainWindow):
             _, self.tables, destination_tables, config = result
             self.destination_tables = set(destination_tables)
             self.table_names = [t["name"] for t in self.tables]
+            temporal = {"date", "datetime", "timestamp"}
+            date_tables = [table for table in self.tables if any(
+                column.get("DATA_TYPE", "").lower() in temporal for column in table.get("columns", [])
+            )]
+            self.date_range_check.setEnabled(bool(date_tables))
+            if not date_tables and self.date_range_check.isChecked():
+                self.date_range_check.setChecked(False)
             self.inspection_snapshot = {"source": self.source_identity(config), "fingerprint": self.schema_fingerprint(self.tables)}
             identity = self.destination_identity(config)
             if self.copied_destination_identity != identity: self.copied_tables.clear()
             self.copied_destination_identity = identity
             self.copied_tables.intersection_update(self.destination_tables)
-            self.render_tables(); self.refresh_rules(); self.save_state(); self.status.setText(f"Inspection complete. Found {len(self.tables)} source tables.")
+            self.render_tables(); self.refresh_rules(); self.save_state()
+            status = f"Inspection complete. Found {len(self.tables)} source tables."
+            if not date_tables:
+                status += " No tables have DATE, DATETIME, or TIMESTAMP columns for range selection."
+            self.status.setText(status)
         elif kind == "connection_report": self.log_message(result[1]); self.info("Connection test", result[1])
         elif kind == "copy":
             _, counts, names, fields, identity = result; self.copied_tables.update(names); self.destination_tables.update(names); self.render_tables(); self.copy_resume = None; self.pause_event = None; self.pause_btn.setText("Pause copy"); self.log_message("Copy complete.\n" + "\n".join(f"  {k}: {v} rows" for k,v in counts.items())); self.status.setText("Copy complete.")
@@ -659,6 +688,15 @@ class AnonymizerWindow(QMainWindow):
             self.overall_progress.setValue(1000)
             self.table_progress.setValue(1000)
             self.overall_eta.setText("ETA: complete"); self.table_eta.setText("ETA: complete")
+            return
+        if event == "range_scan":
+            self.overall_eta.setText("ETA: calculating linked rows…")
+            self.table_eta.setText(f"Relationship scan: {value.get('linked_tables', 0)} tables, "
+                                    f"{value.get('linked_rows', 0):,} linked rows")
+            self.status.setText(
+                f"Finding rows for {value.get('scan_table') or value.get('anchor_table', 'the selected table')} — "
+                f"relationship pass {value.get('iteration', 0)}"
+            )
             return
         total = value.get("total_tables") or 0; complete = value.get("completed_tables") or 0
         total_rows = value.get("total_rows") or 0
@@ -755,8 +793,12 @@ class AnonymizerWindow(QMainWindow):
     @staticmethod
     def schema_fingerprint(tables: list[dict[str, Any]]) -> str:
         import hashlib
-        structure = [{"name": t["name"], "engine": t.get("engine"), "references": sorted(t.get("references", [])), "external_references": sorted(t.get("external_references", [])), "columns": [{k: c.get(k) for k in ("COLUMN_NAME", "DATA_TYPE", "COLUMN_TYPE", "IS_NULLABLE", "COLUMN_KEY", "EXTRA")} for c in t.get("columns", [])]} for t in tables]
+        structure = [{"name": t["name"], "engine": t.get("engine"), "references": sorted(t.get("references", [])), "external_references": sorted(t.get("external_references", [])), "foreign_keys": t.get("foreign_keys", []), "columns": [{k: c.get(k) for k in ("COLUMN_NAME", "DATA_TYPE", "COLUMN_TYPE", "IS_NULLABLE", "COLUMN_KEY", "EXTRA")} for c in t.get("columns", [])]} for t in tables]
         return hashlib.sha256(json.dumps(structure, sort_keys=True, default=str).encode()).hexdigest()
+
+    def _date_range_toggled(self, enabled: bool) -> None:
+        for widget in getattr(self, "_date_range_controls", ()):
+            widget.setEnabled(enabled)
 
     def selected_table_names(self) -> list[str]:
         return [item.text(1) for item in self.table_view.selectedItems()]
@@ -795,7 +837,26 @@ class AnonymizerWindow(QMainWindow):
             self.table_view.setUpdatesEnabled(True)
 
     def _selected_items_changed(self) -> None:
-        self.saved_selection = self.selected_table_names(); self.save_state()
+        selected = set(self.selected_table_names())
+        if selected and self.include_check.isChecked():
+            related = set()
+            for table in self.tables:
+                if table["name"] in selected:
+                    related.update(table.get("references", []))
+                if selected.intersection(table.get("references", [])):
+                    related.add(table["name"])
+            selected.update(related)
+            self.table_view.blockSignals(True)
+            try:
+                for index in range(self.table_view.topLevelItemCount()):
+                    item = self.table_view.topLevelItem(index)
+                    name = item.text(1)
+                    if name in selected:
+                        item.setSelected(True)
+            finally:
+                self.table_view.blockSignals(False)
+        self.saved_selection = [table["name"] for table in self.tables if table["name"] in selected]
+        self.save_state()
 
     def copy_selected(self) -> None:
         self.copy("copy")
@@ -810,20 +871,43 @@ class AnonymizerWindow(QMainWindow):
             if not self.auto_check.isChecked() and action == "copy" and not self.confirm("Confirm copy", "Copy selected data into the destination? Password hashes may be retained according to the rules."): return
             mapping = self.mapping_edit.text().strip() or None
             if mapping is None and not self.auto_check.isChecked() and not self.confirm("No mapping store selected", "The copy will not save lookup mappings. Continue?"): return
+            date_range = None
+            if self.date_range_check.isChecked() and action == "copy":
+                if self.date_range_start.dateTime() > self.date_range_end.dateTime():
+                    raise ValueError("The date range start must be no later than its end")
+                temporal = {"date", "datetime", "timestamp"}
+                checked_tables = self.selected_table_names()
+                table_by_name = {table["name"]: table for table in self.tables}
+                date_tables = [
+                    name for name in checked_tables
+                    if any(column.get("COLUMN_KEY") == "PRI"
+                           for column in table_by_name.get(name, {}).get("columns", []))
+                    and any(column.get("DATA_TYPE", "").lower() in temporal
+                            for column in table_by_name.get(name, {}).get("columns", []))
+                ]
+                full_tables = [name for name in checked_tables if name not in date_tables]
+                date_range = {"date_tables": date_tables,
+                              "start": self.date_range_start.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+                              "end": self.date_range_end.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+                              "full_tables": full_tables}
             selected = self.table_names if action == "recreate_database" else self.selected_table_names()
-            selected = [n for n in selected if n not in self.copied_tables] if action == "copy" else selected
+            if date_range:
+                selected = list(dict.fromkeys([*date_range["date_tables"], *date_range["full_tables"]]))
+            else:
+                selected = [n for n in selected if n not in self.copied_tables] if action == "copy" else selected
             if not selected: return self.info("Select tables", "Select tables to copy.")
             collisions = sorted(set(selected) & self.destination_tables) if action == "copy" else []
             if collisions:
-                if not self.auto_check.isChecked() and not self.confirm("Tables already exist", "These tables already exist in the destination:\n\n" + "\n".join(collisions) + "\n\nMark them as already copied and skip them?"):
+                if not date_range and not self.auto_check.isChecked() and not self.confirm("Tables already exist", "These tables already exist in the destination:\n\n" + "\n".join(collisions) + "\n\nMark them as already copied and skip them?"):
                     return self.info("Recreate existing tables", "Use Recreate selected tables to replace tables already in the destination.")
-                self.copied_tables.update(collisions)
-                selected = [name for name in selected if name not in collisions]
-                self.copied_destination_identity = self.destination_identity(config)
-                self.render_tables()
-                self.save_state()
-                if not selected: return self.info("Nothing to copy", "All selected tables already exist and were marked as copied.")
-            relevant = set(selected)
+                if not date_range:
+                    self.copied_tables.update(collisions)
+                    selected = [name for name in selected if name not in collisions]
+                    self.copied_destination_identity = self.destination_identity(config)
+                    self.render_tables()
+                    self.save_state()
+                    if not selected: return self.info("Nothing to copy", "All selected tables already exist and were marked as copied.")
+            relevant = set(self.table_names) if date_range else set(selected)
             if self.include_check.isChecked() or action == "recreate_database":
                 by_name = {t["name"]: t for t in self.tables}; pending = list(relevant)
                 while pending:
@@ -832,7 +916,7 @@ class AnonymizerWindow(QMainWindow):
                         if dependency not in relevant: relevant.add(dependency); pending.append(dependency)
             rules, stale = prune_rules_to_schema(rules, self.tables, relevant)
             if stale and not self.auto_check.isChecked() and not self.confirm("Rules don’t match this source", "These rule columns are missing and will be ignored:\n\n" + "\n".join(stale[:40]) + "\n\nContinue?"): return
-            state = {"version":1,"config":config,"rules":rules,"selected":selected,"mapping_path":mapping,"rules_path":None if stale else self.rules_edit.text(),"allow_locks":self.allow_locks_check.isChecked(),"include_dependencies":self.include_check.isChecked() or action == "recreate_database","completed_counts":{},"recreate_action":action}
+            state = {"version":1,"config":config,"rules":rules,"selected":selected,"mapping_path":mapping,"rules_path":None if stale else self.rules_edit.text(),"allow_locks":self.allow_locks_check.isChecked(),"include_dependencies":self.include_check.isChecked() or action == "recreate_database","completed_counts":{},"recreate_action":action,"date_range":date_range}
             self.write_checkpoint(state); self.copy_resume = state; self.pause_event = threading.Event(); self.pause_btn.setText("Pause copy"); self._launch_copy(state)
         except Exception as exc: self.error("Could not start copy", exc)
 
@@ -876,7 +960,10 @@ class AnonymizerWindow(QMainWindow):
         self._copy_progress_timer.start()
         self.busy = True
         self._set_busy(True)
-        self.status.setText("Copying selected tables…")
+        self.status.setText(
+            "Finding rows in the date range and following table relationships…"
+            if state.get("date_range") else "Copying selected tables…"
+        )
         self.overall_eta.setText("ETA: estimating…")
         self.table_eta.setText("ETA: waiting for first table")
         self.overall_progress.setValue(0)

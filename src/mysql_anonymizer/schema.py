@@ -32,13 +32,15 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
             })
 
         cur.execute(
-            "SELECT DISTINCT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, REFERENCED_TABLE_NAME "
+            "SELECT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, "
+            "REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME, ORDINAL_POSITION "
             "FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=%s "
             "AND REFERENCED_TABLE_NAME IS NOT NULL",
             (schema,),
         )
         references_by_table: dict[str, list[str]] = {}
         foreign_key_columns: dict[str, set[str]] = {}
+        foreign_keys: dict[str, dict[str, dict[str, Any]]] = {}
         external_references_by_table: dict[str, list[str]] = {}
         for reference in cur.fetchall():
             foreign_key_columns.setdefault(reference["TABLE_NAME"], set()).add(reference["COLUMN_NAME"])
@@ -46,17 +48,36 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
                 references_by_table.setdefault(reference["TABLE_NAME"], []).append(
                     reference["REFERENCED_TABLE_NAME"]
                 )
+                key = foreign_keys.setdefault(reference["TABLE_NAME"], {}).setdefault(
+                    reference["CONSTRAINT_NAME"],
+                    {"name": reference["CONSTRAINT_NAME"],
+                     "referenced_table": reference["REFERENCED_TABLE_NAME"],
+                     "columns": []},
+                )
+                key["columns"].append((
+                    reference["ORDINAL_POSITION"], reference["COLUMN_NAME"],
+                    reference["REFERENCED_COLUMN_NAME"],
+                ))
             else:
                 external_references_by_table.setdefault(reference["TABLE_NAME"], []).append(
                     f"{reference['CONSTRAINT_NAME']} -> "
                     f"{reference['REFERENCED_TABLE_SCHEMA']}.{reference['REFERENCED_TABLE_NAME']}"
                 )
 
+        for table_keys in foreign_keys.values():
+            for key in table_keys.values():
+                key["columns"].sort()
+                key["columns"] = [
+                    {"column": child, "referenced_column": parent}
+                    for _, child, parent in key["columns"]
+                ]
+
         return [{
             "name": table["TABLE_NAME"],
             "engine": table["ENGINE"],
             "columns": columns_by_table.get(table["TABLE_NAME"], []),
             "foreign_key_columns": sorted(foreign_key_columns.get(table["TABLE_NAME"], set())),
+            "foreign_keys": list(foreign_keys.get(table["TABLE_NAME"], {}).values()),
             "references": references_by_table.get(table["TABLE_NAME"], []),
             "external_references": external_references_by_table.get(table["TABLE_NAME"], []),
         } for table in tables]

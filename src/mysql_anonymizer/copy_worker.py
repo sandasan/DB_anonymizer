@@ -74,6 +74,7 @@ def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
             "engine": table.get("engine"),
             "references": sorted(table.get("references", [])),
             "external_references": sorted(table.get("external_references", [])),
+            "foreign_keys": table.get("foreign_keys", []),
             "columns": [
                 {
                     key: column.get(key)
@@ -309,7 +310,7 @@ def run_job(job_path: Path) -> int:
                 item.get("table") != last_logged_batch_table
                 or now - last_activity_log >= 2
             )
-            if event in {"start", "table", "table_done"} or log_batch:
+            if event in {"start", "table", "table_done", "range_scan"} or log_batch:
                 rss_mb = _process_rss_mb()
                 memory = f" rss_mb={rss_mb:.1f}" if rss_mb is not None else ""
                 detail = (
@@ -319,6 +320,12 @@ def run_job(job_path: Path) -> int:
                     f" completed_tables={item.get('completed_tables', len(state.get('completed_counts', {})))}"
                     f" total_tables={item.get('total_tables', 0)}{memory}"
                 )
+                if event == "range_scan":
+                    detail += (f" stage={item.get('stage')} anchor={item.get('anchor_table')!r}"
+                               f" scan_table={item.get('scan_table')!r}"
+                               f" iteration={item.get('iteration', 0)}"
+                               f" linked_tables={item.get('linked_tables', 0)}"
+                               f" linked_rows={item.get('linked_rows', 0)}")
                 _write_log(activity_path, f"copy_progress{detail}")
                 last_activity_log = now
                 if event == "batch":
@@ -345,6 +352,7 @@ def run_job(job_path: Path) -> int:
                 state.get("completed_counts", {}),
                 FilePauseEvent(pause_path, job.get("parent_pid")),
                 bool(state.get("is_resume")),
+                state.get("date_range"),
             )
         except CopyPaused as paused:
             state["completed_counts"] = paused.completed_counts
