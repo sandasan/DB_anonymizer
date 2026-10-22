@@ -8,7 +8,8 @@ from .transformations import TEXT_DATA_TYPES
 
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
 _TRANSFORM_MAX_LENGTH = {
-    "email": len("user") + 14 + len("@example.invalid"),
+    # Keep generated emails within common VARCHAR(32) columns.
+    "email": len("user") + 12 + len("@example.invalid"),
     "phone": len("+1555") + 7,
     "name": len("Person") + 8,
     "address": len("9999 Example Street"),

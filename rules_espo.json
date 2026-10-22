@@ -1,0 +1,2589 @@
+{
+  "confirm_copy_password_hashes": true,
+  "tables": {
+    "account": {
+      "preserve": [
+        "assigned_user_id",
+        "campaign_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "billing_address_street": {
+          "type": "address"
+        },
+        "billing_address_city": {
+          "type": "address"
+        },
+        "billing_address_state": {
+          "type": "address"
+        },
+        "billing_address_country": {
+          "type": "address"
+        },
+        "shipping_address_street": {
+          "type": "address"
+        },
+        "shipping_address_city": {
+          "type": "address"
+        },
+        "shipping_address_state": {
+          "type": "address"
+        },
+        "shipping_address_country": {
+          "type": "address"
+        }
+      }
+    },
+    "account_contact": {
+      "preserve": [
+        "account_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "account_document": {
+      "preserve": [
+        "account_id",
+        "document_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "account_portal_user": {
+      "preserve": [
+        "account_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "account_target_list": {
+      "preserve": [
+        "account_id",
+        "id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "action_history_record": {
+      "preserve": [
+        "auth_log_record_id",
+        "auth_token_id",
+        "id",
+        "target_id",
+        "user_id"
+      ],
+      "anonymize": {
+        "ip_address": {
+          "type": "ip_address"
+        }
+      }
+    },
+    "address_country": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "app_log_record": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "app_secret": {
+      "preserve": [
+        "created_by_id",
+        "delete_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "array_value": {
+      "preserve": [
+        "entity_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "attachment": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "parent_id",
+        "related_id",
+        "source_id"
+      ],
+      "anonymize": {}
+    },
+    "authentication_provider": {
+      "preserve": [
+        "id",
+        "oidc_client_id",
+        "oidc_client_secret",
+        "oidc_token_endpoint",
+        "oidc_username_claim"
+      ],
+      "anonymize": {}
+    },
+    "auth_log_record": {
+      "preserve": [
+        "auth_token_id",
+        "id",
+        "portal_id",
+        "user_id",
+        "username"
+      ],
+      "anonymize": {
+        "ip_address": {
+          "type": "ip_address"
+        }
+      }
+    },
+    "auth_token": {
+      "preserve": [
+        "id",
+        "portal_id",
+        "secret",
+        "token",
+        "user_id"
+      ],
+      "anonymize": {
+        "ip_address": {
+          "type": "ip_address"
+        }
+      }
+    },
+    "autofollow": {
+      "preserve": [
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_flowchart": {
+      "preserve": [
+        "assigned_user_id",
+        "category_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_flowchart_category": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_flowchart_category_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_flow_node": {
+      "preserve": [
+        "divergent_flow_node_id",
+        "element_id",
+        "flowchart_id",
+        "id",
+        "previous_flow_node_id",
+        "process_id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_process": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "flowchart_id",
+        "id",
+        "modified_by_id",
+        "parent_process_flow_node_id",
+        "parent_process_id",
+        "root_process_id",
+        "start_element_id",
+        "target_id",
+        "workflow_id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_signal_listener": {
+      "preserve": [
+        "flow_node_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "bpmn_user_task": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "flow_node_id",
+        "id",
+        "modified_by_id",
+        "process_id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "bus_event": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "bus_meeting_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "phone": {
+          "type": "phone"
+        }
+      }
+    },
+    "bus_meeting": {
+      "preserve": [
+        "b24_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "bus_report": {
+      "preserve": [
+        "b24_id",
+        "bus_meeting_id",
+        "bus_route_id",
+        "created_by_id",
+        "id",
+        "kyiv_district_id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "bus_report_servitor": {
+      "preserve": [
+        "bus_report_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "bus_rides": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "bus_meeting_id",
+        "bus_route_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "address2": {
+          "type": "address"
+        },
+        "phone": {
+          "type": "phone"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        }
+      }
+    },
+    "bus_route": {
+      "preserve": [
+        "b24_id",
+        "created_by_id",
+        "id",
+        "kyiv_district_id",
+        "modified_by_id",
+        "responsible_person_id"
+      ],
+      "anonymize": {}
+    },
+    "bus_route_servitor": {
+      "preserve": [
+        "bus_route_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "bus_vehicle": {
+      "preserve": [
+        "b24_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "call": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "call_type_id",
+        "created_by_id",
+        "id",
+        "mass_call_id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "call_contact": {
+      "preserve": [
+        "call_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "call_lead": {
+      "preserve": [
+        "call_id",
+        "id",
+        "lead_id"
+      ],
+      "anonymize": {}
+    },
+    "call_type": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "call_user": {
+      "preserve": [
+        "call_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "campaign": {
+      "preserve": [
+        "accounts_template_id",
+        "assigned_user_id",
+        "contacts_template_id",
+        "created_by_id",
+        "id",
+        "leads_template_id",
+        "modified_by_id",
+        "users_template_id"
+      ],
+      "anonymize": {}
+    },
+    "campaign_log_record": {
+      "preserve": [
+        "campaign_id",
+        "created_by_id",
+        "id",
+        "object_id",
+        "parent_id",
+        "queue_item_id"
+      ],
+      "anonymize": {}
+    },
+    "campaign_target_list": {
+      "preserve": [
+        "campaign_id",
+        "id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "campaign_target_list_excluding": {
+      "preserve": [
+        "campaign_id",
+        "id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "campaign_tracking_url": {
+      "preserve": [
+        "campaign_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "case": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "inbound_email_id",
+        "lead_id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "case_contact": {
+      "preserve": [
+        "case_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "case_knowledge_base_article": {
+      "preserve": [
+        "case_id",
+        "id",
+        "knowledge_base_article_id"
+      ],
+      "anonymize": {}
+    },
+    "clothing_request": {
+      "preserve": [
+        "b24_id",
+        "club_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "phone_number": {
+          "type": "phone"
+        }
+      }
+    },
+    "club_location": {
+      "preserve": [
+        "b24_id",
+        "created_by_id",
+        "id",
+        "kyiv_district_id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "address": {
+          "type": "address"
+        }
+      }
+    },
+    "club_location_help_assigned_users": {
+      "preserve": [
+        "club_location_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "contact": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "b24_id",
+        "bus_route_id",
+        "campaign_id",
+        "club_location_id",
+        "created_by_id",
+        "hope_group_id",
+        "id",
+        "kn_district_id",
+        "kyiv_district_id",
+        "main_deal_g_n_id",
+        "main_service_id",
+        "modified_by_id",
+        "region_id",
+        "spouse_partner_id",
+        "teacher_id",
+        "telegram_chat_id",
+        "telegram_username"
+      ],
+      "anonymize": {
+        "first_name": {
+          "type": "name"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "birthdate": {
+          "type": "date_shift"
+        },
+        "last_name_ukr": {
+          "type": "name"
+        },
+        "next_birthday": {
+          "type": "date_shift"
+        },
+        "satisfied_city": {
+          "type": "address"
+        },
+        "first_name_ukr": {
+          "type": "name"
+        },
+        "address2": {
+          "type": "address"
+        },
+        "phone_relatives": {
+          "type": "phone"
+        },
+        "spouse_last_name": {
+          "type": "name"
+        },
+        "spouse_birth_date": {
+          "type": "date_shift"
+        },
+        "spouse_first_name": {
+          "type": "name"
+        }
+      }
+    },
+    "contact_document": {
+      "preserve": [
+        "contact_id",
+        "document_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "contact_meeting": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "meeting_id"
+      ],
+      "anonymize": {}
+    },
+    "contact_opportunity": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "opportunity_id"
+      ],
+      "anonymize": {}
+    },
+    "contact_target_list": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "currency": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "currency_record": {
+      "preserve": [
+        "delete_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "currency_record_rate": {
+      "preserve": [
+        "created_by_id",
+        "delete_id",
+        "id",
+        "modified_by_id",
+        "record_id"
+      ],
+      "anonymize": {}
+    },
+    "c_bus_meeting_contact": {
+      "preserve": [
+        "bus_meeting_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_bus_passenger": {
+      "preserve": [
+        "assigned_user_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "c_bus_vehicle_b24_deal": {
+      "preserve": [
+        "bus_report_id",
+        "bus_vehicle_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_contact_additional_service": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "ministry_id"
+      ],
+      "anonymize": {}
+    },
+    "c_contact_children": {
+      "preserve": [
+        "id",
+        "left_id",
+        "right_id"
+      ],
+      "anonymize": {}
+    },
+    "c_contact_open_deals_b_p": {
+      "preserve": [
+        "club_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_contact_parents": {
+      "preserve": [
+        "id",
+        "left_id",
+        "right_id"
+      ],
+      "anonymize": {}
+    },
+    "c_event": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "kyiv_district_id",
+        "modified_by_id",
+        "parent_id",
+        "pk_form_banner_id",
+        "pk_form_token"
+      ],
+      "anonymize": {}
+    },
+    "c_event_contact_participated": {
+      "preserve": [
+        "c_event_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_event_contact_registered": {
+      "preserve": [
+        "c_event_id",
+        "contact_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_help_covid_mb_evangelists": {
+      "preserve": [
+        "contact_id",
+        "help_covid_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_help_mb_evangelists": {
+      "preserve": [
+        "contact_id",
+        "help_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_home_group_location_meetings": {
+      "preserve": [
+        "home_group_location_id",
+        "home_group_meeting_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_home_group_location_participants": {
+      "preserve": [
+        "contact_id",
+        "home_group_location_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_home_group_meeting_did_not_come_to_meeting": {
+      "preserve": [
+        "contact_id",
+        "home_group_meeting_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_home_group_meeting_meeting_arrived": {
+      "preserve": [
+        "contact_id",
+        "home_group_meeting_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_home_group_meeting_new_members_g_n": {
+      "preserve": [
+        "contact_id",
+        "home_group_meeting_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_home_group_meeting_participants_meeting": {
+      "preserve": [
+        "contact_id",
+        "home_group_meeting_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "c_school_attendance_contact": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "school_attendance_id"
+      ],
+      "anonymize": {}
+    },
+    "c_school_visitor_lessons_read_only": {
+      "preserve": [
+        "id",
+        "school_lesson_id",
+        "school_visitor_id"
+      ],
+      "anonymize": {}
+    },
+    "c_test_campaign": {
+      "preserve": [
+        "campaign_id",
+        "id",
+        "test_id"
+      ],
+      "anonymize": {}
+    },
+    "c_test_campaign2": {
+      "preserve": [
+        "campaign_id",
+        "id",
+        "test_id"
+      ],
+      "anonymize": {}
+    },
+    "dashboard_template": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "document": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "file_id",
+        "folder_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "document_folder": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "document_folder_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "document_lead": {
+      "preserve": [
+        "document_id",
+        "id",
+        "lead_id"
+      ],
+      "anonymize": {}
+    },
+    "document_opportunity": {
+      "preserve": [
+        "document_id",
+        "id",
+        "opportunity_id"
+      ],
+      "anonymize": {}
+    },
+    "email": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "created_by_id",
+        "created_event_id",
+        "from_email_address_id",
+        "group_folder_id",
+        "id",
+        "message_id",
+        "modified_by_id",
+        "parent_id",
+        "replied_id",
+        "sent_by_id"
+      ],
+      "anonymize": {
+        "address_name_map": {
+          "type": "address"
+        }
+      }
+    },
+    "email_account": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "email_address",
+        "email_folder_id",
+        "id",
+        "modified_by_id",
+        "password",
+        "smtp_password",
+        "smtp_username",
+        "username"
+      ],
+      "anonymize": {}
+    },
+    "email_address": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "email_email_account": {
+      "preserve": [
+        "email_account_id",
+        "email_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "email_email_address": {
+      "preserve": [
+        "email_address_id",
+        "email_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "email_filter": {
+      "preserve": [
+        "created_by_id",
+        "email_folder_id",
+        "group_email_folder_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "email_folder": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "email_inbound_email": {
+      "preserve": [
+        "email_id",
+        "id",
+        "inbound_email_id"
+      ],
+      "anonymize": {}
+    },
+    "email_queue_item": {
+      "preserve": [
+        "id",
+        "mass_email_id",
+        "target_id"
+      ],
+      "anonymize": {
+        "email_address": {
+          "type": "email"
+        }
+      }
+    },
+    "email_template": {
+      "preserve": [
+        "assigned_user_id",
+        "category_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "email_template_category": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "email_template_category_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "email_user": {
+      "preserve": [
+        "email_id",
+        "folder_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "entity_email_address": {
+      "preserve": [
+        "email_address_id",
+        "entity_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "entity_phone_number": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "phone_number_id"
+      ],
+      "anonymize": {}
+    },
+    "entity_team": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "team_id"
+      ],
+      "anonymize": {}
+    },
+    "entity_user": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "event": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "bus_meeting_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "phone": {
+          "type": "phone"
+        }
+      }
+    },
+    "export": {
+      "preserve": [
+        "attachment_id",
+        "created_by_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "extension": {
+      "preserve": [
+        "created_by_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "external_account": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "family": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "family_contact": {
+      "preserve": [
+        "contact_id",
+        "family_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "feeding": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "point_id"
+      ],
+      "anonymize": {
+        "address2": {
+          "type": "address"
+        },
+        "satisfied_city": {
+          "type": "address"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "phone_number": {
+          "type": "phone"
+        },
+        "birthdate": {
+          "type": "date_shift"
+        }
+      }
+    },
+    "feeding_location": {
+      "preserve": [
+        "b24_id",
+        "created_by_id",
+        "id",
+        "kyiv_district_id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "golden_age": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "main_service_id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "address2": {
+          "type": "address"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "phone_number": {
+          "type": "phone"
+        },
+        "birthdate": {
+          "type": "date_shift"
+        }
+      }
+    },
+    "group_email_folder": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "group_email_folder_team": {
+      "preserve": [
+        "group_email_folder_id",
+        "id",
+        "team_id"
+      ],
+      "anonymize": {}
+    },
+    "help": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "bus_route_id",
+        "club_location_id",
+        "contact_id",
+        "created_by_id",
+        "driver_mb_id",
+        "id",
+        "kn_district_id",
+        "kyiv_district_id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "address2": {
+          "type": "address"
+        },
+        "spouse_birth_date": {
+          "type": "date_shift"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "phone_number": {
+          "type": "phone"
+        },
+        "birthdate": {
+          "type": "date_shift"
+        },
+        "spouse_last_name": {
+          "type": "name"
+        },
+        "spouse_first_name": {
+          "type": "name"
+        },
+        "phone_relatives": {
+          "type": "phone"
+        }
+      }
+    },
+    "help_covid": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "driver_mb_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "address2": {
+          "type": "address"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "phone_number": {
+          "type": "phone"
+        },
+        "birthdate": {
+          "type": "date_shift"
+        }
+      }
+    },
+    "home_group": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "gn_who_transferred_to_gn_participant_id",
+        "hope_group_id",
+        "id",
+        "main_service_id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "address2": {
+          "type": "address"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "phone_number": {
+          "type": "phone"
+        }
+      }
+    },
+    "home_group_location": {
+      "preserve": [
+        "auto_deal_creation_process_id",
+        "b24_id",
+        "created_by_id",
+        "current_meeting_id",
+        "id",
+        "leader_id",
+        "ministry_id",
+        "modified_by_id",
+        "room_owner_id"
+      ],
+      "anonymize": {}
+    },
+    "home_group_meeting": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "created_by_id",
+        "hope_group_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "import": {
+      "preserve": [
+        "created_by_id",
+        "file_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "import_entity": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "import_id"
+      ],
+      "anonymize": {}
+    },
+    "import_error": {
+      "preserve": [
+        "id",
+        "import_id"
+      ],
+      "anonymize": {}
+    },
+    "inbound_email": {
+      "preserve": [
+        "assign_to_user_id",
+        "created_by_id",
+        "group_email_folder_id",
+        "id",
+        "modified_by_id",
+        "password",
+        "reply_email_template_id",
+        "smtp_password",
+        "smtp_username",
+        "team_id",
+        "username"
+      ],
+      "anonymize": {
+        "email_address": {
+          "type": "email"
+        },
+        "reply_from_address": {
+          "type": "address"
+        },
+        "reply_to_address": {
+          "type": "address"
+        }
+      }
+    },
+    "inbound_email_team": {
+      "preserve": [
+        "id",
+        "inbound_email_id",
+        "team_id"
+      ],
+      "anonymize": {}
+    },
+    "integration": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "job": {
+      "preserve": [
+        "id",
+        "scheduled_job_id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "kanban_order": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "knowledge_base_article": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "knowledge_base_article_knowledge_base_category": {
+      "preserve": [
+        "id",
+        "knowledge_base_article_id",
+        "knowledge_base_category_id"
+      ],
+      "anonymize": {}
+    },
+    "knowledge_base_article_portal": {
+      "preserve": [
+        "id",
+        "knowledge_base_article_id",
+        "portal_id"
+      ],
+      "anonymize": {}
+    },
+    "knowledge_base_category": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "knowledge_base_category_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "kyiv_district": {
+      "preserve": [
+        "b24_id",
+        "club_team_id",
+        "coordinator_id",
+        "created_by_id",
+        "executive_director_id",
+        "id",
+        "modified_by_id",
+        "responsible_bus_id",
+        "responsible_g_n_id"
+      ],
+      "anonymize": {}
+    },
+    "layout_record": {
+      "preserve": [
+        "id",
+        "layout_set_id"
+      ],
+      "anonymize": {}
+    },
+    "layout_set": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "lead": {
+      "preserve": [
+        "assigned_user_id",
+        "campaign_id",
+        "created_account_id",
+        "created_by_id",
+        "created_contact_id",
+        "created_opportunity_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "first_name": {
+          "type": "name"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "c_address2": {
+          "type": "address"
+        }
+      }
+    },
+    "lead_capture": {
+      "preserve": [
+        "campaign_id",
+        "created_by_id",
+        "form_id",
+        "id",
+        "inbound_email_id",
+        "modified_by_id",
+        "opt_in_confirmation_email_template_id",
+        "phone_number_country",
+        "target_list_id",
+        "target_team_id"
+      ],
+      "anonymize": {}
+    },
+    "lead_capture_log_record": {
+      "preserve": [
+        "id",
+        "lead_capture_id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "lead_meeting": {
+      "preserve": [
+        "id",
+        "lead_id",
+        "meeting_id"
+      ],
+      "anonymize": {}
+    },
+    "lead_target_list": {
+      "preserve": [
+        "id",
+        "lead_id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "mass_action": {
+      "preserve": [
+        "created_by_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "mass_call": {
+      "preserve": [
+        "call_type_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "mass_call_callers": {
+      "preserve": [
+        "id",
+        "mass_call_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "mass_call_contacts": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "mass_call_id"
+      ],
+      "anonymize": {}
+    },
+    "mass_email": {
+      "preserve": [
+        "campaign_id",
+        "created_by_id",
+        "email_template_id",
+        "id",
+        "inbound_email_id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "from_address": {
+          "type": "address"
+        },
+        "reply_to_address": {
+          "type": "address"
+        }
+      }
+    },
+    "mass_email_target_list": {
+      "preserve": [
+        "id",
+        "mass_email_id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "mass_email_target_list_excluding": {
+      "preserve": [
+        "id",
+        "mass_email_id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "meeting": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "meeting_user": {
+      "preserve": [
+        "id",
+        "meeting_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "ministry": {
+      "preserve": [
+        "b24_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "next_number": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "note": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id",
+        "related_id",
+        "super_parent_id"
+      ],
+      "anonymize": {}
+    },
+    "note_portal": {
+      "preserve": [
+        "id",
+        "note_id",
+        "portal_id"
+      ],
+      "anonymize": {}
+    },
+    "note_team": {
+      "preserve": [
+        "id",
+        "note_id",
+        "team_id"
+      ],
+      "anonymize": {}
+    },
+    "note_user": {
+      "preserve": [
+        "id",
+        "note_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "notification": {
+      "preserve": [
+        "action_id",
+        "created_by_id",
+        "id",
+        "related_id",
+        "related_parent_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "opportunity": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "campaign_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "orphans_lunch": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "parent_last_name": {
+          "type": "name"
+        },
+        "parent_first_name": {
+          "type": "name"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "phone_number": {
+          "type": "phone"
+        },
+        "phone_relatives": {
+          "type": "phone"
+        }
+      }
+    },
+    "o_auth_account": {
+      "preserve": [
+        "access_token",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "provider_id",
+        "refresh_token",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "o_auth_provider": {
+      "preserve": [
+        "client_id",
+        "client_secret",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "token_endpoint"
+      ],
+      "anonymize": {}
+    },
+    "password_change_request": {
+      "preserve": [
+        "id",
+        "request_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "phone_number": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "pk_registration": {
+      "preserve": [
+        "created_by_id",
+        "event_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "phone_number": {
+          "type": "phone"
+        }
+      }
+    },
+    "pk_registration_contact": {
+      "preserve": [
+        "contact_id",
+        "id",
+        "pk_registration_id"
+      ],
+      "anonymize": {}
+    },
+    "planet_d": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "portal": {
+      "preserve": [
+        "auth_token_lifetime",
+        "auth_token_max_idle_time",
+        "authentication_provider_id",
+        "company_logo_id",
+        "created_by_id",
+        "custom_id",
+        "id",
+        "layout_set_id",
+        "logo_id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "portal_portal_role": {
+      "preserve": [
+        "id",
+        "portal_id",
+        "portal_role_id"
+      ],
+      "anonymize": {}
+    },
+    "portal_report": {
+      "preserve": [
+        "id",
+        "portal_id",
+        "report_id"
+      ],
+      "anonymize": {}
+    },
+    "portal_role": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "portal_role_user": {
+      "preserve": [
+        "id",
+        "portal_role_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "portal_user": {
+      "preserve": [
+        "id",
+        "portal_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "ppo_evangelization": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        },
+        "phone_number": {
+          "type": "phone"
+        },
+        "birthdate": {
+          "type": "date_shift"
+        },
+        "phone_relatives": {
+          "type": "phone"
+        }
+      }
+    },
+    "preferences": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "region": {
+      "preserve": [
+        "b24_id",
+        "club_team_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "reminder": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "report": {
+      "preserve": [
+        "assigned_user_id",
+        "category_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "email_sending_interval": {
+          "type": "email"
+        },
+        "email_sending_setting_weekdays": {
+          "type": "email"
+        }
+      }
+    },
+    "report_category": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "report_category_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "report_filter": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "report_id"
+      ],
+      "anonymize": {}
+    },
+    "report_panel": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "report_id"
+      ],
+      "anonymize": {}
+    },
+    "report_target_list": {
+      "preserve": [
+        "id",
+        "report_id",
+        "target_list_id"
+      ],
+      "anonymize": {}
+    },
+    "report_user": {
+      "preserve": [
+        "id",
+        "report_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "ride": {
+      "preserve": [
+        "created_by_id",
+        "driver_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "ride_block": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "owner_id",
+        "ride_id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "ride_participant": {
+      "preserve": [
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "ride_question": {
+      "preserve": [
+        "answered_by_id",
+        "author_contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "telegram_chat_id"
+      ],
+      "anonymize": {}
+    },
+    "ride_request": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "pair_request_id",
+        "passenger_id",
+        "ride_id"
+      ],
+      "anonymize": {
+        "address": {
+          "type": "address"
+        }
+      }
+    },
+    "role": {
+      "preserve": [
+        "id"
+      ],
+      "anonymize": {
+        "group_email_account_permission": {
+          "type": "email"
+        }
+      }
+    },
+    "role_team": {
+      "preserve": [
+        "id",
+        "role_id",
+        "team_id"
+      ],
+      "anonymize": {}
+    },
+    "role_user": {
+      "preserve": [
+        "id",
+        "role_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "scheduled_job": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "scheduled_job_log_record": {
+      "preserve": [
+        "id",
+        "scheduled_job_id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "school_attendance": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_deal_id",
+        "b24_id",
+        "created_by_id",
+        "id",
+        "lesson_id",
+        "modified_by_id",
+        "school_course_id",
+        "school_stream_id",
+        "student_id"
+      ],
+      "anonymize": {}
+    },
+    "school_course": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "school_enrollment": {
+      "preserve": [
+        "assigned_user_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "mentor_id",
+        "modified_by_id",
+        "school_course_id",
+        "school_stream_id"
+      ],
+      "anonymize": {}
+    },
+    "school_enrollment_school_lesson": {
+      "preserve": [
+        "id",
+        "school_enrollment_id",
+        "school_lesson_id"
+      ],
+      "anonymize": {}
+    },
+    "school_enrollment_school_stream_lesson": {
+      "preserve": [
+        "id",
+        "school_enrollment_id",
+        "school_stream_lesson_id"
+      ],
+      "anonymize": {}
+    },
+    "school_lesson": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "school_course_id"
+      ],
+      "anonymize": {}
+    },
+    "school_stream": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "school_course_id",
+        "school_id",
+        "teacher_id"
+      ],
+      "anonymize": {}
+    },
+    "school_stream_lesson": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "school_lesson_id",
+        "school_stream_id",
+        "teacher_id"
+      ],
+      "anonymize": {}
+    },
+    "school_visitor": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "school_course_id",
+        "school_flow_id"
+      ],
+      "anonymize": {
+        "last_name": {
+          "type": "name"
+        },
+        "first_name": {
+          "type": "name"
+        },
+        "phone_number": {
+          "type": "phone"
+        }
+      }
+    },
+    "sms": {
+      "preserve": [
+        "created_by_id",
+        "from_phone_number_id",
+        "id",
+        "modified_by_id",
+        "parent_id",
+        "replied_id"
+      ],
+      "anonymize": {}
+    },
+    "sms_phone_number": {
+      "preserve": [
+        "id",
+        "phone_number_id",
+        "sms_id"
+      ],
+      "anonymize": {}
+    },
+    "star_subscription": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "stream_subscription": {
+      "preserve": [
+        "entity_id",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "system_data": {
+      "preserve": [
+        "id",
+        "last_password_recovery_date"
+      ],
+      "anonymize": {}
+    },
+    "target": {
+      "preserve": [
+        "assigned_user_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {
+        "first_name": {
+          "type": "name"
+        },
+        "last_name": {
+          "type": "name"
+        },
+        "address_street": {
+          "type": "address"
+        },
+        "address_city": {
+          "type": "address"
+        },
+        "address_state": {
+          "type": "address"
+        },
+        "address_country": {
+          "type": "address"
+        }
+      }
+    },
+    "target_list": {
+      "preserve": [
+        "assigned_user_id",
+        "category_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "target_list_category": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "target_list_category_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "target_list_user": {
+      "preserve": [
+        "id",
+        "target_list_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "task": {
+      "preserve": [
+        "account_id",
+        "assigned_user_id",
+        "c_c_task_initiator_id",
+        "c_task_initiator_id",
+        "contact_id",
+        "created_by_id",
+        "email_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "team": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "created_by_id",
+        "id",
+        "layout_set_id",
+        "modified_by_id",
+        "parent_id",
+        "working_time_calendar_id"
+      ],
+      "anonymize": {}
+    },
+    "team_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "team_user": {
+      "preserve": [
+        "id",
+        "team_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "team_workflow": {
+      "preserve": [
+        "id",
+        "team_id",
+        "workflow_id"
+      ],
+      "anonymize": {}
+    },
+    "template": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "tg_bot_session": {
+      "preserve": [
+        "chat_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "tg_bot_sim_message": {
+      "preserve": [
+        "chat_id",
+        "id",
+        "message_id"
+      ],
+      "anonymize": {}
+    },
+    "two_factor_code": {
+      "preserve": [
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "unique_id": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "target_id"
+      ],
+      "anonymize": {}
+    },
+    "user": {
+      "preserve": [
+        "avatar_id",
+        "c_contact_id",
+        "contact_id",
+        "created_by_id",
+        "dashboard_template_id",
+        "default_team_id",
+        "delete_id",
+        "id",
+        "layout_set_id",
+        "password",
+        "telegram_chat_id",
+        "user_name",
+        "working_time_calendar_id"
+      ],
+      "anonymize": {
+        "first_name": {
+          "type": "name"
+        },
+        "last_name": {
+          "type": "name"
+        }
+      }
+    },
+    "user_data": {
+      "preserve": [
+        "auth2_f_a_email_address",
+        "auth2_f_a_totp_secret",
+        "id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "user_reaction": {
+      "preserve": [
+        "id",
+        "parent_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "user_working_time_range": {
+      "preserve": [
+        "id",
+        "user_id",
+        "working_time_range_id"
+      ],
+      "anonymize": {}
+    },
+    "warm_contact": {
+      "preserve": [
+        "assigned_user_id",
+        "b24_id",
+        "contact_id",
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "webhook": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "secret_key",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "webhook_event_queue_item": {
+      "preserve": [
+        "id",
+        "target_id",
+        "user_id"
+      ],
+      "anonymize": {}
+    },
+    "webhook_queue_item": {
+      "preserve": [
+        "id",
+        "target_id",
+        "webhook_id"
+      ],
+      "anonymize": {}
+    },
+    "workflow": {
+      "preserve": [
+        "category_id",
+        "created_by_id",
+        "flowchart_id",
+        "id",
+        "modified_by_id",
+        "portal_id",
+        "target_report_id"
+      ],
+      "anonymize": {}
+    },
+    "workflow_category": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id",
+        "parent_id"
+      ],
+      "anonymize": {}
+    },
+    "workflow_category_path": {
+      "preserve": [
+        "ascendor_id",
+        "descendor_id",
+        "id"
+      ],
+      "anonymize": {}
+    },
+    "workflow_log_record": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "target_id",
+        "workflow_id"
+      ],
+      "anonymize": {}
+    },
+    "workflow_round_robin": {
+      "preserve": [
+        "action_id",
+        "flowchart_id",
+        "id",
+        "last_user_id",
+        "workflow_id"
+      ],
+      "anonymize": {}
+    },
+    "working_time_calendar": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    },
+    "working_time_calendar_working_time_range": {
+      "preserve": [
+        "id",
+        "working_time_calendar_id",
+        "working_time_range_id"
+      ],
+      "anonymize": {}
+    },
+    "working_time_range": {
+      "preserve": [
+        "created_by_id",
+        "id",
+        "modified_by_id"
+      ],
+      "anonymize": {}
+    }
+  }
+}

@@ -21,7 +21,7 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     if kind == "constant":
         return rule["value"]
     if kind == "email":
-        return f"user{stable_number(table, column, value, 10**14)}@example.invalid"
+        return f"user{stable_number(table, column, value, 10**12)}@example.invalid"
     if kind == "phone":
         return f"+1555{stable_number(table, column, value, 10**7):07d}"
     if kind == "unique":
