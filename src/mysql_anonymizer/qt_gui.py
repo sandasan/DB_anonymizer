@@ -103,8 +103,9 @@ class AnonymizerWindow(QMainWindow):
         self.load_profiles()
         if getattr(self, "last_profile", "") and self.profile_box.currentText() == self.last_profile:
             self.load_profile()
-        elif getattr(self, "tables_view_state", None):
+        if getattr(self, "tables_view_state", None):
             self._load_tables_view_config(self.tables_view_state)
+            self.save_state()
         QTimer.singleShot(250, self._offer_resume)
 
     @staticmethod
@@ -535,6 +536,7 @@ class AnonymizerWindow(QMainWindow):
         self.rules_text.setPlainText(json.dumps(init_rules(self.tables), indent=2, ensure_ascii=False))
 
     def load_profiles(self) -> None:
+        self.profile_box.blockSignals(True)
         self.profile_box.clear()
         directory = self._state_file().parent / "profiles"
         names = []
@@ -548,6 +550,7 @@ class AnonymizerWindow(QMainWindow):
         last = getattr(self, "last_profile", "")
         if last in names:
             self.profile_box.setCurrentText(last)
+        self.profile_box.blockSignals(False)
 
     def _profile_changed(self, _name: str) -> None:
         self.save_state()
@@ -569,15 +572,22 @@ class AnonymizerWindow(QMainWindow):
     def _load_tables_view_config(self, view: dict[str, Any]) -> None:
         self.tables_view_state = view
         self.saved_selection = [x for x in view.get("selected_tables", []) if isinstance(x, str)] if isinstance(view.get("selected_tables", []), list) else []
-        self.include_check.setChecked(bool(view.get("include_dependencies", True)))
-        self.table_filter.setText(str(view.get("filter", "")))
-        self.hide_copied_check.setChecked(bool(view.get("hide_copied", False)))
-        for key, widget in (("date_range_start", self.date_range_start), ("date_range_end", self.date_range_end)):
-            value = view.get(key)
-            if isinstance(value, str):
-                parsed = QDateTime.fromString(value, "yyyy-MM-dd HH:mm:ss")
-                if parsed.isValid(): widget.setDateTime(parsed)
-        self.date_range_check.setChecked(bool(view.get("date_range_enabled", False)))
+        widgets = (self.include_check, self.table_filter, self.hide_copied_check,
+                   self.date_range_start, self.date_range_end, self.date_range_check)
+        for widget in widgets: widget.blockSignals(True)
+        try:
+            self.include_check.setChecked(bool(view.get("include_dependencies", True)))
+            self.table_filter.setText(str(view.get("filter", "")))
+            self.hide_copied_check.setChecked(bool(view.get("hide_copied", False)))
+            for key, widget in (("date_range_start", self.date_range_start), ("date_range_end", self.date_range_end)):
+                value = view.get(key)
+                if isinstance(value, str):
+                    parsed = QDateTime.fromString(value, "yyyy-MM-dd HH:mm:ss")
+                    if parsed.isValid(): widget.setDateTime(parsed)
+            self.date_range_check.setChecked(bool(view.get("date_range_enabled", False)))
+        finally:
+            for widget in widgets: widget.blockSignals(False)
+        self._date_range_toggled(self.date_range_check.isChecked())
 
     def save_profile(self) -> None:
         name, ok = QInputDialog.getText(self, "Save app profile", "Profile name:")
