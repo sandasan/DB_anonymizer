@@ -111,14 +111,16 @@ def _related_parent_keys(cursor, schema: str, child: dict[str, Any], parent: dic
     pairs = foreign_key["columns"]
     child_qname = qname(schema, child["name"])
     parent_qname = qname(schema, parent["name"])
+    child_alias, parent_alias = "_copy_child", "_copy_parent"
     join = " AND ".join(
-        f"{child_qname}.{_quote_identifier(pair['column'])} = "
-        f"{parent_qname}.{_quote_identifier(pair['referenced_column'])}"
+        f"{child_alias}.{_quote_identifier(pair['column'])} = "
+        f"{parent_alias}.{_quote_identifier(pair['referenced_column'])}"
         for pair in pairs
     )
-    qparent_pk = ",".join(f"{parent_qname}.{_quote_identifier(column)}" for column in parent_pk)
+    qparent_pk = ",".join(f"{parent_alias}.{_quote_identifier(column)}" for column in parent_pk)
     statement = (
-        f"SELECT DISTINCT {qparent_pk} FROM {child_qname} JOIN {parent_qname} ON {join}"
+        f"SELECT DISTINCT {qparent_pk} FROM {child_qname} AS {child_alias} "
+        f"JOIN {parent_qname} AS {parent_alias} ON {join}"
     )
     if child_keys is None:
         cursor.execute(statement)
@@ -131,7 +133,7 @@ def _related_parent_keys(cursor, schema: str, child: dict[str, Any], parent: dic
     ordered = list(child_keys)
     for offset in range(0, len(ordered), 400):
         part = ordered[offset:offset + 400]
-        where = _key_predicate(child_pk, len(part), qualifier=child_qname)
+        where = _key_predicate(child_pk, len(part), qualifier=child_alias)
         params = [value for key in part for value in key] if len(child_pk) > 1 else [key[0] for key in part]
         cursor.execute(f"{statement} WHERE {where}", tuple(params))
         result.update(tuple(row) for row in cursor.fetchall())
