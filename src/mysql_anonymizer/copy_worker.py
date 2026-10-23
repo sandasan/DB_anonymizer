@@ -165,6 +165,33 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
         count = clear_mapping_store(args["mapping"]) if args.get("mapping") else 0
         return ["clear", names, count]
 
+    if operation == "discard_partial_table":
+        source_settings, destination_settings = args["source"], args["destination"]
+        source_identity = (str(source_settings.get("host", "localhost")).casefold(),
+                           int(source_settings.get("port", 3306)),
+                           str(source_settings.get("database", "")).casefold())
+        destination_identity = (str(destination_settings.get("host", "localhost")).casefold(),
+                                int(destination_settings.get("port", 3306)),
+                                str(destination_settings.get("database", "")).casefold())
+        if source_identity == destination_identity:
+            raise ValueError("Refusing to remove data from the source database")
+        table = args["table"]
+        connection = connect(destination_settings)
+        try:
+            drop_destination_tables(connection, [table])
+        finally:
+            connection.close()
+        mapping = args.get("mapping")
+        if mapping:
+            from .mappings import open_mapping_store
+            db = open_mapping_store(mapping)
+            try:
+                db.execute("DELETE FROM mappings WHERE table_name=?", (table,))
+                db.commit()
+            finally:
+                db.close()
+        return ["partial_table_discarded", table]
+
     if operation == "browse_tables":
         role, settings = args["role"], args["settings"]
         conn = connect(settings)
@@ -353,6 +380,7 @@ def run_job(job_path: Path) -> int:
                 FilePauseEvent(pause_path, job.get("parent_pid")),
                 bool(state.get("is_resume")),
                 state.get("date_range"),
+                state.get("skipped_tables", []),
             )
         except CopyPaused as paused:
             state["completed_counts"] = paused.completed_counts

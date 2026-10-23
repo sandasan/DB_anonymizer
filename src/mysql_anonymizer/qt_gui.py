@@ -90,6 +90,8 @@ class AnonymizerWindow(QMainWindow):
         self.mapping_fields: dict[str, list[str]] = {}
         self._pending_lookup_selection: tuple[str, str] | None = None
         self.copy_resume: dict[str, Any] | None = None
+        self.active_copy_table: str | None = None
+        self.failed_copy_table: str | None = None
         self.pause_event: threading.Event | None = None
         self.close_when_paused = False
         self.copied_destination_identity: tuple[str, str, str] | None = None
@@ -209,8 +211,11 @@ class AnonymizerWindow(QMainWindow):
         self.copy_btn = QPushButton("Copy selected tables"); self.copy_btn.clicked.connect(self.copy_selected)
         self.copy_btn.setObjectName("primaryButton")
         self.pause_btn = QPushButton("Pause copy"); self.pause_btn.setEnabled(False); self.pause_btn.clicked.connect(self.pause_or_resume)
+        self.skip_failed_btn = QPushButton("Remove failed table and continue")
+        self.skip_failed_btn.setEnabled(False); self.skip_failed_btn.clicked.connect(self.discard_failed_table)
         for button in (self.save_config_btn, self.inspect_btn, self.test_btn): actions.addWidget(button)
         actions.addWidget(self.auto_check); actions.addStretch(1); actions.addWidget(self.pause_btn); actions.addWidget(self.copy_btn)
+        actions.addWidget(self.skip_failed_btn)
         root.addLayout(actions)
         self.overall_title = QLabel("Overall progress")
         self.overall_eta = QLabel("ETA: —")
@@ -648,6 +653,7 @@ class AnonymizerWindow(QMainWindow):
         for edit in edits:
             edit.setEnabled(not busy)
         self.pause_btn.setEnabled(self.copy_resume is not None or self.pause_event is not None)
+        self.skip_failed_btn.setEnabled(not busy and self.copy_resume is not None and self.failed_copy_table is not None)
 
     def on_finished(self) -> None:
         self.busy = False; self._set_busy(False)
@@ -660,6 +666,8 @@ class AnonymizerWindow(QMainWindow):
             QTimer.singleShot(0, self.close)
 
     def on_error(self, operation: str, message: str, traceback_text: str) -> None:
+        if operation in {"copy", "copy worker"}:
+            self.failed_copy_table = self.active_copy_table
         self.status.setText("Operation failed."); self.log_message("Error: " + message)
         self._write_activity_log(f"operation_failed operation={operation}")
         try:
@@ -672,6 +680,7 @@ class AnonymizerWindow(QMainWindow):
             self.overall_eta.setText("ETA: unavailable; resume available")
             self.table_eta.setText("ETA: unavailable; resume available")
             self.pause_event = None; self.pause_btn.setText("Resume copy"); self.pause_btn.setEnabled(True)
+            self.skip_failed_btn.setEnabled(self.failed_copy_table is not None)
         if self.close_when_paused: QTimer.singleShot(0, self.close)
         self.error("Operation failed", message)
 
@@ -712,6 +721,32 @@ class AnonymizerWindow(QMainWindow):
             self.copy_resume = result[1]; self.pause_event = None; self.pause_btn.setText("Resume copy"); self.pause_btn.setEnabled(True); self.status.setText("Copy paused and checkpoint saved.")
             self.overall_eta.setText("ETA: paused"); self.table_eta.setText("ETA: paused")
             if self.close_when_paused: QTimer.singleShot(0, self.close)
+        elif kind == "partial_table_discarded":
+            table = result[1]
+            state = self.copy_resume
+            if state is not None:
+                state["skipped_tables"] = list(dict.fromkeys(
+                    [*state.get("skipped_tables", []), table]
+                ))
+                state["completed_counts"] = dict(state.get("completed_counts", {}))
+                state["completed_counts"].pop(table, None)
+                state.pop("paused_table", None)
+                state["is_resume"] = True
+                self.write_checkpoint(state)
+                self.copy_resume = state
+            self.destination_tables.discard(table); self.copied_tables.discard(table)
+            self.failed_copy_table = None
+            self.render_tables()
+            if state is not None and state.get("selected"):
+                def continue_saved_copy() -> None:
+                    self.pause_event = threading.Event(); self.pause_btn.setText("Pause copy")
+                    self._launch_copy(state)
+                QTimer.singleShot(0, continue_saved_copy)
+                self.log_message(f"Removed incomplete table {table!r}; continuing the saved copy.")
+            else:
+                self.copy_resume = None; self.pause_event = None
+                self._checkpoint_path().unlink(missing_ok=True)
+                self.log_message(f"Removed incomplete table {table!r}. No tables remain in the saved copy.")
         elif kind == "lookup_fields":
             self.mapping_fields = result[1]; self.filter_lookup_tables(); self.log_message(f"Loaded {len(self.mapping_fields)} mapped tables.")
             if self._pending_lookup_selection is not None:
@@ -1122,6 +1157,8 @@ class AnonymizerWindow(QMainWindow):
             if modified != self._copy_progress_mtime_ns:
                 progress = json.loads(progress_path.read_text(encoding="utf-8"))
                 self._copy_progress_mtime_ns = modified
+                if progress.get("event") == "table":
+                    self.active_copy_table = progress.get("table")
                 self.on_progress(progress)
         except (OSError, json.JSONDecodeError):
             pass
@@ -1178,6 +1215,26 @@ class AnonymizerWindow(QMainWindow):
             if self._copy_worker_paths is not None:
                 self._copy_worker_paths["pause_path"].touch(mode=0o600, exist_ok=True)
             self.pause_btn.setEnabled(False); self.status.setText("Pausing after the current batch…")
+
+    def discard_failed_table(self) -> None:
+        table = self.failed_copy_table
+        state = self.copy_resume
+        if not table or state is None:
+            return
+        if table in state.get("completed_counts", {}):
+            return self.error("Cannot remove completed table", "The active table is marked complete in the saved checkpoint.")
+        if not self.confirm("Remove failed table", f"Drop the incomplete destination table {table!r}, discard its saved lookup mappings, skip it, and resume the remaining tables?"):
+            return
+        try:
+            config = state["config"]
+            self._launch_database_operation(
+                "discard_partial_table",
+                {"source": config["source"], "destination": config["destination"],
+                 "table": table, "mapping": state.get("mapping_path")},
+                f"Removing incomplete table {table}…",
+            )
+        except Exception as exc:
+            self.error("Could not remove incomplete table", exc)
 
     def _offer_resume(self) -> None:
         try:

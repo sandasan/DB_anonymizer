@@ -355,7 +355,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                   completed_counts: dict[str, int] | None = None,
                   pause_event=None,
                   resume: bool = False,
-                  date_range: dict[str, Any] | None = None) -> dict[str, int]:
+                  date_range: dict[str, Any] | None = None,
+                  skipped_tables: list[str] | None = None) -> dict[str, int]:
     if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
         raise ValueError("batch_size must be a positive integer")
     all_tables = inspect_schema(source, schema)
@@ -396,6 +397,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         set(selected_tables) if selected_tables is not None
         else {table["name"] for table in all_tables}
     )
+    skipped_tables = set(skipped_tables or [])
     if date_range:
         roots = {*date_range.get("date_tables", []), *date_range.get("full_tables", [])}
         if not roots.issubset(explicitly_selected):
@@ -404,6 +406,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
     else:
         selected_names = set(resolve_table_selection(
             all_tables, selected_tables, include_dependencies, existing_destination_tables))
+    if not date_range:
+        selected_names.difference_update(skipped_tables)
     # A table may still be selected in the UI after an earlier copy. If another
     # selected table references it, reuse the destination copy instead of treating
     # it as a collision or trying to copy it again.
@@ -469,7 +473,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         range_keys: dict[str, set[tuple[Any, ...]]] | None = None
         if date_range:
             range_keys = _select_related_keys(src, schema, all_tables, date_range, progress_callback)
-            selected_names = set(range_keys)
+            selected_names = set(range_keys) - skipped_tables
+            range_keys = {name: keys for name, keys in range_keys.items() if name not in skipped_tables}
             # Range resolution can reach tables copied by an earlier run. Keep
             # those tables available in the destination as foreign-key parents,
             # but do not clear or copy them again. During resume, retain an
