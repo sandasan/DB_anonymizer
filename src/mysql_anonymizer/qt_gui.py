@@ -101,6 +101,10 @@ class AnonymizerWindow(QMainWindow):
         self.load_config()
         self.load_rules()
         self.load_profiles()
+        if getattr(self, "last_profile", "") and self.profile_box.currentText() == self.last_profile:
+            self.load_profile()
+        elif getattr(self, "tables_view_state", None):
+            self._load_tables_view_config(self.tables_view_state)
         QTimer.singleShot(250, self._offer_resume)
 
     @staticmethod
@@ -190,6 +194,7 @@ class AnonymizerWindow(QMainWindow):
         profile_layout.addWidget(self.profile_box, 1)
         self.profile_save_btn = QPushButton("Save profile…"); self.profile_save_btn.clicked.connect(self.save_profile)
         self.profile_load_btn = QPushButton("Load profile"); self.profile_load_btn.clicked.connect(self.load_profile)
+        self.profile_box.currentTextChanged.connect(self._profile_changed)
         profile_layout.addWidget(self.profile_load_btn); profile_layout.addWidget(self.profile_save_btn)
         paths.addRow("App profile", profile_row)
         root.addLayout(paths)
@@ -306,6 +311,13 @@ class AnonymizerWindow(QMainWindow):
         layout.addWidget(range_box)
         self._date_range_controls = (self.date_range_start, self.date_range_end)
         self._date_range_toggled(False)
+        self.date_range_check.toggled.connect(self._tables_view_changed)
+        self.date_range_start.dateTimeChanged.connect(self._tables_view_changed)
+        self.date_range_end.dateTimeChanged.connect(self._tables_view_changed)
+        self.include_check.toggled.connect(self._tables_view_changed)
+        self.selected_top_check.toggled.connect(self._tables_view_changed)
+        self.hide_copied_check.toggled.connect(self._tables_view_changed)
+        self.table_filter.textChanged.connect(self._tables_view_changed)
         danger = QHBoxLayout(); danger.addStretch(1)
         for widget in (self.clear_data_btn, self.recreate_tables_btn, self.recreate_db_btn): danger.addWidget(widget)
         layout.addLayout(danger)
@@ -404,6 +416,8 @@ class AnonymizerWindow(QMainWindow):
                 identity = state.get("copied_destination_identity")
                 self.copied_destination_identity = tuple(identity) if isinstance(identity, list) and len(identity) == 3 else None
                 self.inspection_snapshot = state.get("inspection_snapshot")
+                self.last_profile = state.get("last_profile", "")
+                self.tables_view_state = state.get("tables_view", {}) if isinstance(state.get("tables_view"), dict) else {}
                 self.selected_top_check.blockSignals(True)
                 self.selected_top_check.setChecked(bool(state.get("show_selected_tables_on_top", False)))
                 self.selected_top_check.blockSignals(False)
@@ -425,6 +439,8 @@ class AnonymizerWindow(QMainWindow):
                      "copied_tables": sorted(self.copied_tables),
                      "copied_destination_identity": list(self.copied_destination_identity) if self.copied_destination_identity else None,
                      "show_selected_tables_on_top": self.selected_top_check.isChecked()}
+            state["last_profile"] = self.profile_box.currentText()
+            state["tables_view"] = self._tables_view_config()
             if self.inspection_snapshot: state["inspection_snapshot"] = self.inspection_snapshot
             path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8"); path.chmod(0o600)
         except OSError as exc:
@@ -529,12 +545,45 @@ class AnonymizerWindow(QMainWindow):
                     if isinstance(profile, dict) and isinstance(profile.get("name"), str): names.append(profile["name"])
                 except (OSError, json.JSONDecodeError): pass
         self.profile_box.addItems(sorted(names, key=str.casefold))
+        last = getattr(self, "last_profile", "")
+        if last in names:
+            self.profile_box.setCurrentText(last)
+
+    def _profile_changed(self, _name: str) -> None:
+        self.save_state()
+
+    def _tables_view_changed(self, *_args: Any) -> None:
+        self.save_state()
+
+    def _tables_view_config(self) -> dict[str, Any]:
+        return {
+            "include_dependencies": self.include_check.isChecked(),
+            "selected_tables": self.selected_table_names() or self.saved_selection,
+            "filter": self.table_filter.text(),
+            "hide_copied": self.hide_copied_check.isChecked(),
+            "date_range_enabled": self.date_range_check.isChecked(),
+            "date_range_start": self.date_range_start.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+            "date_range_end": self.date_range_end.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+        }
+
+    def _load_tables_view_config(self, view: dict[str, Any]) -> None:
+        self.tables_view_state = view
+        self.saved_selection = [x for x in view.get("selected_tables", []) if isinstance(x, str)] if isinstance(view.get("selected_tables", []), list) else []
+        self.include_check.setChecked(bool(view.get("include_dependencies", True)))
+        self.table_filter.setText(str(view.get("filter", "")))
+        self.hide_copied_check.setChecked(bool(view.get("hide_copied", False)))
+        for key, widget in (("date_range_start", self.date_range_start), ("date_range_end", self.date_range_end)):
+            value = view.get(key)
+            if isinstance(value, str):
+                parsed = QDateTime.fromString(value, "yyyy-MM-dd HH:mm:ss")
+                if parsed.isValid(): widget.setDateTime(parsed)
+        self.date_range_check.setChecked(bool(view.get("date_range_enabled", False)))
 
     def save_profile(self) -> None:
         name, ok = QInputDialog.getText(self, "Save app profile", "Profile name:")
         if not ok or not name.strip(): return
         try:
-            profile = {"version": 1, "name": name.strip(), "config": self.config(), "rules": json.loads(self.rules_text.toPlainText() or "{}"), "config_path": self.config_edit.text(), "rules_path": self.rules_edit.text(), "mapping_path": self.mapping_edit.text(), "auto_confirm_operations": self.auto_check.isChecked(), "show_selected_tables_on_top": self.selected_top_check.isChecked()}
+            profile = {"version": 1, "name": name.strip(), "config": self.config(), "tables_view": self._tables_view_config(), "rules": json.loads(self.rules_text.toPlainText() or "{}"), "config_path": self.config_edit.text(), "rules_path": self.rules_edit.text(), "mapping_path": self.mapping_edit.text(), "auto_confirm_operations": self.auto_check.isChecked(), "show_selected_tables_on_top": self.selected_top_check.isChecked()}
             path = self._state_file().parent / "profiles"; path.mkdir(mode=0o700, parents=True, exist_ok=True)
             try: path.chmod(0o700)
             except OSError: pass
@@ -556,7 +605,7 @@ class AnonymizerWindow(QMainWindow):
             self.rules_text.setPlainText(json.dumps(profile["rules"], indent=2, ensure_ascii=False)); self.load_config_preferences(profile["config"])
             self.auto_check.setChecked(bool(profile.get("auto_confirm_operations", False)))
             self.selected_top_check.setChecked(bool(profile.get("show_selected_tables_on_top", False)))
-            self.saved_selection = profile["config"].get("tables_view", {}).get("selected_tables", [])
+            self._load_tables_view_config(profile.get("tables_view", profile["config"].get("tables_view", {})))
             self.render_tables()
             self.save_state()
         except Exception as exc: self.error("Could not load profile", exc)
