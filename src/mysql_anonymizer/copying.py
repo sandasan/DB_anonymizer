@@ -470,7 +470,18 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         if date_range:
             range_keys = _select_related_keys(src, schema, all_tables, date_range, progress_callback)
             selected_names = set(range_keys)
-            tables = [table for table in all_tables if table["name"] in selected_names]
+            # Range resolution can reach tables copied by an earlier run. Keep
+            # those tables available in the destination as foreign-key parents,
+            # but do not clear or copy them again. During resume, retain an
+            # existing table that is not checkpointed as complete so its partial
+            # contents can be rebuilt from the saved range keys.
+            tables = [
+                table for table in all_tables
+                if table["name"] in selected_names
+                and (table["name"] not in existing_destination_tables
+                     or (resume and table["name"] not in completed_names))
+            ]
+            selected_names = {table["name"] for table in tables}
             table_positions = {table["name"]: index for index, table in enumerate(tables, start=1)}
             range_external_references = [
                 f"{table['name']}.{reference}"
