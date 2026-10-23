@@ -100,11 +100,12 @@ class AnonymizerWindow(QMainWindow):
         self._load_state()
         self.load_config()
         self.load_rules()
+        startup_tables_view = copy.deepcopy(getattr(self, "tables_view_state", {}))
         self.load_profiles()
         if getattr(self, "last_profile", "") and self.profile_box.currentText() == self.last_profile:
             self.load_profile()
-        if getattr(self, "tables_view_state", None):
-            self._load_tables_view_config(self.tables_view_state)
+        if startup_tables_view:
+            self._load_tables_view_config(startup_tables_view)
             self.save_state()
         QTimer.singleShot(250, self._offer_resume)
 
