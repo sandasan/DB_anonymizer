@@ -111,16 +111,55 @@ def _related_parent_keys(cursor, schema: str, child: dict[str, Any], parent: dic
     pairs = foreign_key["columns"]
     child_qname = qname(schema, child["name"])
     parent_qname = qname(schema, parent["name"])
-    child_alias, parent_alias = "_copy_child", "_copy_parent"
+    if child["name"] == parent["name"]:
+        # Self-referencing foreign keys need no join: the referenced keys are
+        # already present on each selected child row. Avoiding a self-join also
+        # keeps LOCK TABLES compatible with the unaliased source table lock.
+        referenced_columns = [pair["referenced_column"] for pair in pairs]
+        child_fk_columns = ",".join(_quote_identifier(pair["column"]) for pair in pairs)
+        referenced_values: set[tuple[Any, ...]] = set()
+        if child_keys is None:
+            cursor.execute(f"SELECT DISTINCT {child_fk_columns} FROM {child_qname}")
+            referenced_values.update(tuple(row) for row in cursor.fetchall()
+                                     if all(value is not None for value in row))
+        else:
+            if not child_keys:
+                return set()
+            if not child_pk:
+                raise ValueError(f"Selected relationship table {child['name']!r} must have a primary key")
+            ordered = list(child_keys)
+            for offset in range(0, len(ordered), 400):
+                part = ordered[offset:offset + 400]
+                where = _key_predicate(child_pk, len(part))
+                params = [value for key in part for value in key] if len(child_pk) > 1 else [key[0] for key in part]
+                cursor.execute(f"SELECT DISTINCT {child_fk_columns} FROM {child_qname} WHERE {where}", tuple(params))
+                referenced_values.update(tuple(row) for row in cursor.fetchall()
+                                         if all(value is not None for value in row))
+        if not referenced_values:
+            return set()
+        result: set[tuple[Any, ...]] = set()
+        ordered_values = list(referenced_values)
+        qparent_pk = ",".join(_quote_identifier(column) for column in parent_pk)
+        qreferenced = ",".join(_quote_identifier(column) for column in referenced_columns)
+        for offset in range(0, len(ordered_values), 400):
+            part = ordered_values[offset:offset + 400]
+            where = _key_predicate(referenced_columns, len(part))
+            params = [value for key in part for value in key] if len(referenced_columns) > 1 else [key[0] for key in part]
+            cursor.execute(
+                f"SELECT DISTINCT {qparent_pk} FROM {parent_qname} WHERE {where}",
+                tuple(params),
+            )
+            result.update(tuple(row) for row in cursor.fetchall())
+        return result
+
     join = " AND ".join(
-        f"{child_alias}.{_quote_identifier(pair['column'])} = "
-        f"{parent_alias}.{_quote_identifier(pair['referenced_column'])}"
+        f"{child_qname}.{_quote_identifier(pair['column'])} = "
+        f"{parent_qname}.{_quote_identifier(pair['referenced_column'])}"
         for pair in pairs
     )
-    qparent_pk = ",".join(f"{parent_alias}.{_quote_identifier(column)}" for column in parent_pk)
+    qparent_pk = ",".join(f"{parent_qname}.{_quote_identifier(column)}" for column in parent_pk)
     statement = (
-        f"SELECT DISTINCT {qparent_pk} FROM {child_qname} AS {child_alias} "
-        f"JOIN {parent_qname} AS {parent_alias} ON {join}"
+        f"SELECT DISTINCT {qparent_pk} FROM {child_qname} JOIN {parent_qname} ON {join}"
     )
     if child_keys is None:
         cursor.execute(statement)
@@ -133,7 +172,7 @@ def _related_parent_keys(cursor, schema: str, child: dict[str, Any], parent: dic
     ordered = list(child_keys)
     for offset in range(0, len(ordered), 400):
         part = ordered[offset:offset + 400]
-        where = _key_predicate(child_pk, len(part), qualifier=child_alias)
+        where = _key_predicate(child_pk, len(part), qualifier=child_qname)
         params = [value for key in part for value in key] if len(child_pk) > 1 else [key[0] for key in part]
         cursor.execute(f"{statement} WHERE {where}", tuple(params))
         result.update(tuple(row) for row in cursor.fetchall())
