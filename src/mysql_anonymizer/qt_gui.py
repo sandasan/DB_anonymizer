@@ -6,6 +6,7 @@ import copy
 import faulthandler
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -1322,12 +1323,58 @@ class AnonymizerWindow(QMainWindow):
         if not selected: return
         table, col = selected[0].text(0), selected[0].text(1)
         try:
-            rules = json.loads(self.rules_text.toPlainText() or "{}"); spec = rules.get("tables", {}).get(table, {})
+            text = self.rules_text.toPlainText()
+            rules = json.loads(text or "{}"); spec = rules.get("tables", {}).get(table, {})
             if col in spec.get("anonymize", {}):
                 transform = spec["anonymize"][col]; self.rule_mode.setCurrentText("Anonymize"); self.rule_type.setCurrentText(transform.get("type", "email")); self.rule_constant.setText(json.dumps(transform.get("value"), ensure_ascii=False) if "value" in transform else "")
             elif col in spec.get("preserve", []): self.rule_mode.setCurrentText("Preserve")
             else: self.rule_mode.setCurrentText("Unconfigured")
+            self._select_rule_json_entry(text, table, col)
         except Exception: pass
+
+    def _select_rule_json_entry(self, text: str, table: str, column: str) -> None:
+        """Highlight the selected table/column entry in the JSON rules editor."""
+        tables_key = re.search(r'"tables"\s*:', text)
+        if not tables_key:
+            return
+        table_pattern = re.compile(re.escape(json.dumps(table, ensure_ascii=False)) + r"\s*:")
+        table_match = table_pattern.search(text, tables_key.end())
+        if not table_match:
+            return
+        opening = text.find("{", table_match.end())
+        if opening < 0:
+            return
+        depth, in_string, escaped = 0, False, False
+        closing = None
+        for index in range(opening, len(text)):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    closing = index + 1
+                    break
+        if closing is None:
+            return
+        column_token = json.dumps(column, ensure_ascii=False)
+        position = text.find(column_token, opening, closing)
+        if position < 0:
+            return
+        cursor = self.rules_text.textCursor()
+        cursor.setPosition(position)
+        cursor.setPosition(position + len(column_token), cursor.MoveMode.KeepAnchor)
+        self.rules_text.setTextCursor(cursor)
+        self.rules_text.ensureCursorVisible()
 
     def apply_rule(self) -> None:
         selected = self.rule_tree.selectedItems()
