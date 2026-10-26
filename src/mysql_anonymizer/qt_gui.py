@@ -291,7 +291,7 @@ class AnonymizerWindow(QMainWindow):
         self.select_all_btn = QPushButton("Select all"); self.select_all_btn.clicked.connect(lambda: self.table_view.selectAll())
         self.clear_selection_btn = QPushButton("Clear selection"); self.clear_selection_btn.clicked.connect(lambda: self.table_view.clearSelection())
         self.include_check = QCheckBox("Select directly related tables automatically"); self.include_check.setChecked(True)
-        self.include_check.setToolTip("Also select tables referenced by the selection and tables that reference it.")
+        self.include_check.setToolTip("For copying, also select tables referenced by the selection and tables that reference it. Recreating selected tables always includes the full connected set of related tables.")
         self.allow_locks_check = QCheckBox("Allow source table locks for non-InnoDB")
         self.selected_top_check = QCheckBox("Show selected tables at top"); self.selected_top_check.toggled.connect(self.render_tables)
         self.hide_copied_check = QCheckBox("Hide copied tables"); self.hide_copied_check.toggled.connect(self.render_tables)
@@ -898,6 +898,23 @@ class AnonymizerWindow(QMainWindow):
     def selected_table_names(self) -> list[str]:
         return [item.text(1) for item in self.table_view.selectedItems()]
 
+    def related_table_names(self, names: list[str]) -> list[str]:
+        """Return the full same-schema foreign-key-connected set for names."""
+        by_name = {table["name"]: table for table in self.tables}
+        related = set(names)
+        pending = list(names)
+        while pending:
+            current = pending.pop()
+            neighbors = set(by_name[current].get("references", []))
+            neighbors.update(
+                table["name"] for table in self.tables
+                if current in table.get("references", [])
+            )
+            for neighbor in neighbors - related:
+                related.add(neighbor)
+                pending.append(neighbor)
+        return [table["name"] for table in self.tables if table["name"] in related]
+
     def render_tables(self) -> None:
         if not hasattr(self, "table_view"): return
         selected = set(self.selected_table_names()) | set(self.saved_selection)
@@ -990,6 +1007,8 @@ class AnonymizerWindow(QMainWindow):
                 selected = list(dict.fromkeys([*date_range["date_tables"], *date_range["full_tables"]]))
             else:
                 selected = [n for n in selected if n not in self.copied_tables] if action == "copy" else selected
+            if action == "replace_tables":
+                selected = self.related_table_names(selected)
             if not selected: return self.info("Select tables", "Select tables to copy.")
             collisions = sorted(set(selected) & self.destination_tables) if action == "copy" else []
             if collisions:
@@ -1253,6 +1272,7 @@ class AnonymizerWindow(QMainWindow):
     def recreate_tables(self) -> None:
         names = self.selected_table_names()
         if not names: return self.info("Select tables", "Select source tables to recreate.")
+        names = self.related_table_names(names)
         if self.auto_check.isChecked() or self.confirm("Recreate destination tables", "The selected destination tables will be dropped and recopied:\n\n" + "\n".join(names)):
             self.copy("replace_tables")
 
