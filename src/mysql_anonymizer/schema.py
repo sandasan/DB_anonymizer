@@ -116,3 +116,24 @@ def resolve_table_selection(tables: list[dict[str, Any]], selected_tables: list[
             raise ValueError("Selected tables reference tables that are not selected: "
                              + ", ".join(missing) + ". Include these dependencies with --table or use --include-dependencies")
     return [table["name"] for table in tables if table["name"] in selected]
+
+
+def expand_related_tables(tables: list[dict[str, Any]], selected_tables: list[str]) -> list[str]:
+    """Expand selections to the full connected component of same-schema FKs."""
+    by_name = {table["name"]: table for table in tables}
+    unknown = sorted(set(selected_tables) - by_name.keys())
+    if unknown:
+        raise ValueError("Unknown source table(s): " + ", ".join(unknown))
+    related = set(selected_tables)
+    pending = list(selected_tables)
+    while pending:
+        current = pending.pop()
+        neighbors = set(by_name[current].get("references", []))
+        neighbors.update(
+            table["name"] for table in tables
+            if current in table.get("references", [])
+        )
+        for neighbor in neighbors - related:
+            related.add(neighbor)
+            pending.append(neighbor)
+    return [table["name"] for table in tables if table["name"] in related]

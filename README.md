@@ -266,3 +266,13 @@ ALTER TABLE `staging_database`.`legacy_table` ENGINE=InnoDB;
 ```
 
 Re-run the engine query and proceed only when it returns no rows. Keep the source account read-only; perform conversions using a separate administrator account.
+
+## Tests
+
+Run the functional tests with Python's standard library test runner:
+
+```sh
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+The suite covers schema selection and related-table expansion, anonymization rules, transformations, and configuration validation without requiring a live MySQL server.

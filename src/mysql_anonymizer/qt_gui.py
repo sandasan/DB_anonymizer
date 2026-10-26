@@ -31,6 +31,7 @@ from .core import (
     list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
     save_json_atomic,
 )
+from .schema import expand_related_tables
 
 
 class TaskSignals(QObject):
@@ -900,20 +901,7 @@ class AnonymizerWindow(QMainWindow):
 
     def related_table_names(self, names: list[str]) -> list[str]:
         """Return the full same-schema foreign-key-connected set for names."""
-        by_name = {table["name"]: table for table in self.tables}
-        related = set(names)
-        pending = list(names)
-        while pending:
-            current = pending.pop()
-            neighbors = set(by_name[current].get("references", []))
-            neighbors.update(
-                table["name"] for table in self.tables
-                if current in table.get("references", [])
-            )
-            for neighbor in neighbors - related:
-                related.add(neighbor)
-                pending.append(neighbor)
-        return [table["name"] for table in self.tables if table["name"] in related]
+        return expand_related_tables(self.tables, names)
 
     def render_tables(self) -> None:
         if not hasattr(self, "table_view"): return
