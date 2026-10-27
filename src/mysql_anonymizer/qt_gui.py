@@ -1374,7 +1374,27 @@ class AnonymizerWindow(QMainWindow):
         cursor.setPosition(position)
         cursor.setPosition(position + len(column_token), cursor.MoveMode.KeepAnchor)
         self.rules_text.setTextCursor(cursor)
+        # Scroll using the middle of the selected token. Qt otherwise tends to
+        # keep the cursor at the end of the selection visible, which can leave
+        # the highlighted start clipped at the top or bottom of the viewport.
+        focus = self.rules_text.textCursor()
+        focus.setPosition(position + len(column_token) // 2)
+        self.rules_text.setTextCursor(focus)
         self.rules_text.ensureCursorVisible()
+        self.rules_text.setTextCursor(cursor)
+        # The editor can still be laying out after a tree selection, so repeat
+        # the visibility adjustment once the current event has completed.
+        QTimer.singleShot(0, lambda: self._ensure_rule_selection_visible(position, len(column_token)))
+
+    def _ensure_rule_selection_visible(self, start: int, length: int) -> None:
+        cursor = self.rules_text.textCursor()
+        cursor.setPosition(start)
+        cursor.setPosition(start + length, cursor.MoveMode.KeepAnchor)
+        focus = self.rules_text.textCursor()
+        focus.setPosition(start + length // 2)
+        self.rules_text.setTextCursor(focus)
+        self.rules_text.ensureCursorVisible()
+        self.rules_text.setTextCursor(cursor)
 
     def apply_rule(self) -> None:
         selected = self.rule_tree.selectedItems()
