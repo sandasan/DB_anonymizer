@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit,
-    QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem,
+    QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton,
     QVBoxLayout, QWidget,
 )
 
@@ -186,6 +186,16 @@ class AnonymizerWindow(QMainWindow):
         central = QWidget()
         root = QVBoxLayout(central)
         root.setContentsMargins(12, 10, 12, 8)
+        visibility = QHBoxLayout()
+        visibility.addWidget(QLabel("Show:"))
+        for label, attr in (("Setup", "setup_panel"), ("Actions", "actions_panel"),
+                            ("Progress", "progress_panel"), ("Activity log", "log")):
+            toggle = QToolButton(); toggle.setText(label); toggle.setCheckable(True); toggle.setChecked(True)
+            toggle.setToolButtonStyle(QToolButton.ToolButtonTextOnly)
+            toggle.toggled.connect(lambda shown, name=attr: getattr(self, name).setVisible(shown))
+            visibility.addWidget(toggle)
+        visibility.addStretch(1)
+        root.addLayout(visibility)
         paths = QFormLayout()
         self.config_edit = self._path_edit(self.config_path)
         config_row = self._browse_row(self.config_edit, self.choose_config, self.save_config_as)
@@ -203,7 +213,8 @@ class AnonymizerWindow(QMainWindow):
         self.profile_box.currentTextChanged.connect(self._profile_changed)
         profile_layout.addWidget(self.profile_load_btn); profile_layout.addWidget(self.profile_save_btn)
         paths.addRow("App profile", profile_row)
-        root.addLayout(paths)
+        self.setup_panel = QWidget(); self.setup_panel.setLayout(paths)
+        root.addWidget(self.setup_panel)
 
         actions = QHBoxLayout()
         self.save_config_btn = QPushButton("Save config"); self.save_config_btn.clicked.connect(self.save_config)
@@ -218,7 +229,8 @@ class AnonymizerWindow(QMainWindow):
         for button in (self.save_config_btn, self.inspect_btn, self.test_btn): actions.addWidget(button)
         actions.addWidget(self.auto_check); actions.addStretch(1); actions.addWidget(self.pause_btn); actions.addWidget(self.copy_btn)
         actions.addWidget(self.skip_failed_btn)
-        root.addLayout(actions)
+        self.actions_panel = QWidget(); self.actions_panel.setLayout(actions)
+        root.addWidget(self.actions_panel)
         self.overall_title = QLabel("Overall progress")
         self.overall_eta = QLabel("ETA: —")
         self.overall_progress = QProgressBar(); self.overall_progress.setRange(0, 1000)
@@ -230,10 +242,13 @@ class AnonymizerWindow(QMainWindow):
         self._overall_initial_tables = 0
         self._table_started_at: float | None = None
         self.status = QLabel("Load connection settings, then inspect the source.")
-        root.addWidget(self.overall_title); root.addWidget(self.overall_eta)
-        root.addWidget(self.overall_progress)
-        root.addWidget(self.table_title); root.addWidget(self.table_eta)
-        root.addWidget(self.table_progress); root.addWidget(self.status)
+        self.progress_panel = QWidget(); progress_layout = QVBoxLayout(self.progress_panel)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.addWidget(self.overall_title); progress_layout.addWidget(self.overall_eta)
+        progress_layout.addWidget(self.overall_progress)
+        progress_layout.addWidget(self.table_title); progress_layout.addWidget(self.table_eta)
+        progress_layout.addWidget(self.table_progress)
+        root.addWidget(self.progress_panel); root.addWidget(self.status)
 
         self.tabs = QTabWidget(); root.addWidget(self.tabs, 1)
         self.connections_tab = QWidget(); self.tables_tab = QWidget(); self.rules_tab = QWidget()
