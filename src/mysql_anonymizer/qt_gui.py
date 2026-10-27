@@ -352,13 +352,14 @@ class AnonymizerWindow(QMainWindow):
         self.rule_status = QComboBox(); self.rule_status.addItems(["All statuses", "Anonymized", "Preserved", "Unconfigured", "Needs attention"]); self.rule_status.currentTextChanged.connect(self.refresh_rules)
         controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status); layout.addLayout(controls)
         self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Rule status"])
+        self.rule_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
         self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"])
         self.rule_constant = QLineEdit(); self.rule_constant.setPlaceholderText("JSON value for constant")
         editrow = QHBoxLayout(); editrow.addWidget(QLabel("Mode")); editrow.addWidget(self.rule_mode); editrow.addWidget(QLabel("Transform")); editrow.addWidget(self.rule_type); editrow.addWidget(self.rule_constant, 1)
-        apply_btn = QPushButton("Apply to selected column"); apply_btn.clicked.connect(self.apply_rule); editrow.addWidget(apply_btn)
+        apply_btn = QPushButton("Apply to selected fields"); apply_btn.clicked.connect(self.apply_rule); editrow.addWidget(apply_btn)
         remove_btn = QPushButton("Remove rule"); remove_btn.clicked.connect(self.remove_rule); editrow.addWidget(remove_btn); layout.addLayout(editrow)
         self.rules_text = QPlainTextEdit(); self.rules_text.setMinimumHeight(280)
         self._rules_refresh_timer = QTimer(self); self._rules_refresh_timer.setSingleShot(True); self._rules_refresh_timer.setInterval(250); self._rules_refresh_timer.timeout.connect(self.refresh_rules)
@@ -1398,20 +1399,25 @@ class AnonymizerWindow(QMainWindow):
 
     def apply_rule(self) -> None:
         selected = self.rule_tree.selectedItems()
-        if not selected: return self.info("Select a column", "Select a column in the rule list first.")
-        table, col = selected[0].text(0), selected[0].text(1)
+        if not selected: return self.info("Select fields", "Select one or more fields in the rule list first.")
         try:
-            rules = json.loads(self.rules_text.toPlainText() or "{}"); spec = rules.setdefault("tables", {}).setdefault(table, {})
-            spec.setdefault("preserve", []); spec.setdefault("anonymize", {})
-            spec["preserve"] = [x for x in spec["preserve"] if x != col]; spec["anonymize"].pop(col, None)
-            if self.rule_mode.currentText() == "Preserve": spec["preserve"].append(col)
-            elif self.rule_mode.currentText() == "Anonymize":
+            rules = json.loads(self.rules_text.toPlainText() or "{}")
+            mode = self.rule_mode.currentText()
+            transform = None
+            if mode == "Anonymize":
                 transform = {"type": self.rule_type.currentText()}
                 if transform["type"] == "constant":
                     raw = self.rule_constant.text()
                     try: transform["value"] = json.loads(raw)
                     except json.JSONDecodeError: transform["value"] = raw
-                spec["anonymize"][col] = transform
+            for item in selected:
+                table, col = item.text(0), item.text(1)
+                spec = rules.setdefault("tables", {}).setdefault(table, {})
+                spec.setdefault("preserve", []); spec.setdefault("anonymize", {})
+                spec["preserve"] = [x for x in spec["preserve"] if x != col]
+                spec["anonymize"].pop(col, None)
+                if mode == "Preserve": spec["preserve"].append(col)
+                elif mode == "Anonymize": spec["anonymize"][col] = copy.deepcopy(transform)
             self.rules_text.blockSignals(True); self.rules_text.setPlainText(json.dumps(rules, indent=2, ensure_ascii=False)); self.rules_text.blockSignals(False); self.refresh_rules()
         except Exception as exc: self.error("Could not update rule", exc)
 
