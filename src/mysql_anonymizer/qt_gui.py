@@ -1019,10 +1019,13 @@ class AnonymizerWindow(QMainWindow):
             mapping = self.mapping_edit.text().strip() or None
             if mapping is None and not self.auto_check.isChecked() and not self.confirm("No mapping store selected", "The copy will not save lookup mappings. Continue?"): return
             date_range = None
-            if self.date_range_check.isChecked() and action == "copy":
+            if self.date_range_check.isChecked() and action in {"copy", "replace_tables"}:
                 if self.date_range_start.dateTime() > self.date_range_end.dateTime():
                     raise ValueError("The date range start must be no later than its end")
                 temporal = {"date", "datetime", "timestamp"}
+                # Recreate selected tables uses the same date-range anchors as a
+                # normal copy. Related tables are expanded below, then the copy
+                # worker resolves their rows from these anchors' date window.
                 checked_tables = self.selected_table_names()
                 table_by_name = {table["name"]: table for table in self.tables}
                 date_tables = [
