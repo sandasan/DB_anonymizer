@@ -533,7 +533,11 @@ class AnonymizerWindow(QMainWindow):
 
     def save_rules_as(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Save rules as", self.rules_edit.text(), "JSON files (*.json)")
-        if path: self.rules_edit.setText(path); self.save_rules()
+        if path:
+            previous_path = self.rules_edit.text()
+            self.rules_edit.setText(path)
+            if not self.save_rules():
+                self.rules_edit.setText(previous_path)
 
     def choose_mapping(self) -> None:
         path, _ = QFileDialog.getSaveFileName(self, "Select mapping store", self.mapping_edit.text(), "SQLite databases (*.sqlite3 *.sqlite *.db)")
@@ -548,12 +552,38 @@ class AnonymizerWindow(QMainWindow):
             self.rules_text.blockSignals(True); self.rules_text.setPlainText(json.dumps(load_json(self.rules_edit.text()), indent=2, ensure_ascii=False)); self.rules_text.blockSignals(False); self.refresh_rules(); self.log_message(f"Loaded rules from {self.rules_edit.text()}.")
         except Exception as exc: self.rules_text.blockSignals(False); self.error("Could not load rules", exc)
 
-    def save_rules(self) -> None:
+    def save_rules(self) -> bool:
         try:
             rules = json.loads(self.rules_text.toPlainText() or "{}")
             if not isinstance(rules, dict): raise ValueError("Rules must be a JSON object")
-            save_json_atomic(self.rules_edit.text(), rules); self.refresh_rules(); self.log_message(f"Saved rules to {self.rules_edit.text()}.")
-        except Exception as exc: self.error("Could not save rules", exc)
+            save_json_atomic(self.rules_edit.text(), rules)
+            self.save_state()
+            self._sync_active_profile_rules(rules)
+            self.refresh_rules()
+            self.log_message(f"Saved rules to {self.rules_edit.text()}.")
+            return True
+        except Exception as exc:
+            self.error("Could not save rules", exc)
+            return False
+
+    def _sync_active_profile_rules(self, rules: dict[str, Any]) -> None:
+        """Keep a saved profile from restoring an older rules snapshot at startup."""
+        name = self.profile_box.currentText()
+        if not name:
+            return
+        path = self._state_file().parent / "profiles" / f"{quote(name, safe='')}.json"
+        if not path.exists():
+            return
+        try:
+            profile = load_json(str(path))
+            if not isinstance(profile, dict):
+                return
+            profile["rules"] = copy.deepcopy(rules)
+            profile["rules_path"] = self.rules_edit.text()
+            save_json_atomic(str(path), profile)
+            path.chmod(0o600)
+        except Exception as exc:
+            self.log_message(f"Saved rules file, but could not update profile {name!r}: {exc}")
 
     def generate_rules(self) -> None:
         if not self.tables: return self.info("Inspect source first", "Inspect the source database before generating rules.")
