@@ -4,6 +4,7 @@ import hashlib
 import ipaddress
 import re
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 TEXT_DATA_TYPES = {"char", "varchar", "tinytext", "text", "mediumtext", "longtext"}
@@ -27,6 +28,25 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     if kind == "unique":
         digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).hexdigest()
         return f"anon{digest}"
+    if kind == "pnr_code":
+        alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).digest()
+        return "".join(alphabet[b % len(alphabet)] for b in digest[:6])
+    if kind == "passport":
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).digest()
+        country = str(rule.get("country", "")).upper()
+        if country == "GB":
+            digits = int.from_bytes(digest[:8], "big") % 1_000_000
+            letter = chr(ord("A") + digest[8] % 26)
+            return f"GB{digits:06d}{letter}"
+        digits = int.from_bytes(digest[:8], "big") % 10_000_000_000
+        return f"{digits:010d}"
+    if kind == "location_generalization":
+        target = rule.get("target")
+        labels = {"hotel_class": "Hotel"}
+        if target not in labels:
+            raise ValueError(f"Unsupported location_generalization target {target!r} for {table}.{column}")
+        return str(rule.get("value", labels[target]))
     if kind == "ip_address":
         try:
             address = ipaddress.ip_address(str(value).strip())
@@ -48,6 +68,38 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         if isinstance(value, (date, datetime)):
             return value + delta
         raise ValueError(f"date_shift configured on non-date {table}.{column}")
+    if kind == "date_round":
+        granularity = rule.get("granularity", "month")
+        if not isinstance(value, (date, datetime)):
+            raise ValueError(f"date_round configured on non-date {table}.{column}")
+        if granularity == "month":
+            year, month = value.year, value.month
+        elif granularity == "year":
+            year, month = value.year, 1
+        elif granularity == "decade":
+            year, month = value.year - value.year % 10, 1
+        else:
+            raise ValueError(f"Unsupported date_round granularity {granularity!r} for {table}.{column}")
+        if isinstance(value, datetime):
+            return value.replace(year=year, month=month, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return value.replace(year=year, month=month, day=1)
+    if kind == "numeric_variance":
+        try:
+            amount = Decimal(str(value))
+            percent = Decimal(str(rule.get("percent", 10)))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"numeric_variance requires a numeric value and percent for {table}.{column}") from exc
+        if not amount.is_finite() or not percent.is_finite() or percent < 0 or percent > 100:
+            raise ValueError(f"numeric_variance percent must be between 0 and 100 for {table}.{column}")
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).digest()
+        fraction = Decimal(int.from_bytes(digest[:8], "big")) / Decimal(2**64 - 1)
+        multiplier = Decimal(1) + (fraction * 2 - 1) * percent / Decimal(100)
+        result = amount * multiplier
+        if isinstance(value, int) and not isinstance(value, bool):
+            return int(result.quantize(Decimal("1")))
+        if isinstance(value, float):
+            return float(result)
+        return result
     raise ValueError(f"Unsupported transformation {kind!r} for {table}.{column}")
 
 

@@ -7,6 +7,9 @@ from typing import Any
 from .transformations import TEXT_DATA_TYPES
 
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
+_NUMERIC_DATA_TYPES = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
+_TEXT_TRANSFORMS = {"email", "phone", "name", "address", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
+_SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "constant"}
 _TRANSFORM_MAX_LENGTH = {
     # Keep generated emails within common VARCHAR(32) columns.
     "email": len("user") + 12 + len("@example.invalid"),
@@ -15,6 +18,8 @@ _TRANSFORM_MAX_LENGTH = {
     "address": len("9999 Example Street"),
     "ip_address": 39,
     "unique": len("anon") + 64,
+    "passport": 10,
+    "pnr_code": 6,
 }
 
 
@@ -139,18 +144,33 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"{tn}.{col} is in both preserve and anonymize; remove it from anonymize")
             if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|token|secret|salt", col, re.I):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
-            if rule.get("type") in {"email", "phone", "name", "address", "ip_address", "unique"} and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
+            if rule.get("type") in _TEXT_TRANSFORMS and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                 raise ValueError(
                     f"Text transformation {rule.get('type')!r} configured for non-text column "
                     f"{tn}.{col} ({cols[col]['COLUMN_TYPE']}); preserve it or choose a compatible rule"
                 )
             kind = rule.get("type")
             data_type = cols[col]["DATA_TYPE"].lower()
-            if kind == "date_shift" and data_type not in _TEMPORAL_DATA_TYPES:
+            if kind in {"date_shift", "date_round"} and data_type not in _TEMPORAL_DATA_TYPES:
                 raise ValueError(
-                    f"date_shift configured for non-date column {tn}.{col} "
+                    f"{kind} configured for non-date column {tn}.{col} "
                     f"({cols[col]['COLUMN_TYPE']}); preserve it or choose a compatible rule"
                 )
+            if kind == "date_round" and rule.get("granularity", "month") not in {"month", "year", "decade"}:
+                raise ValueError(f"Unsupported date_round granularity for {tn}.{col}")
+            if kind == "numeric_variance":
+                if data_type not in _NUMERIC_DATA_TYPES:
+                    raise ValueError(f"numeric_variance configured for non-numeric column {tn}.{col} ({cols[col]['COLUMN_TYPE']})")
+                try:
+                    percent = float(rule.get("percent", 10))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"numeric_variance percent must be between 0 and 100 for {tn}.{col}") from exc
+                if not 0 <= percent <= 100:
+                    raise ValueError(f"numeric_variance percent must be between 0 and 100 for {tn}.{col}")
+            if kind == "location_generalization" and rule.get("target") != "hotel_class":
+                raise ValueError(f"Unsupported location_generalization target for {tn}.{col}; use 'hotel_class'")
+            if kind == "passport" and rule.get("country") not in {None, "GB", "gb"}:
+                raise ValueError(f"Unsupported passport country format for {tn}.{col}; supported country is 'GB'")
             column_type = cols[col]["COLUMN_TYPE"]
             length_match = re.fullmatch(r"(?:var)?char\((\d+)\)", column_type, re.I)
             if length_match and cols[col]["COLUMN_KEY"] != "UNI":
@@ -160,6 +180,8 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 required_length = None if kind == "unique" else _TRANSFORM_MAX_LENGTH.get(kind)
                 if kind == "constant" and isinstance(rule.get("value"), str):
                     required_length = len(rule["value"])
+                if kind == "location_generalization" and isinstance(rule.get("value", "Hotel"), str):
+                    required_length = len(rule.get("value", "Hotel"))
                 if required_length is not None and required_length > max_length:
                     raise ValueError(
                         f"Transformation {kind!r} may produce {required_length} characters, "
@@ -168,7 +190,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
             if cols[col]["COLUMN_KEY"] == "UNI":
                 if cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                     raise ValueError(f"Unique non-text column {tn}.{col} requires an application-specific transformation")
-                if rule.get("type") not in {"email", "phone", "name", "address", "ip_address", "unique"}:
+                if kind not in _TEXT_TRANSFORMS:
                     raise ValueError(f"Unique text column {tn}.{col} requires a text transformation such as name or unique")
-            if rule.get("type") not in {"email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"}:
+            if kind not in _SUPPORTED_TRANSFORMS:
                 raise ValueError(f"Unsupported transform for {tn}.{col}")

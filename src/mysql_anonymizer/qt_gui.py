@@ -374,8 +374,9 @@ class AnonymizerWindow(QMainWindow):
         self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
-        self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique"])
+        self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "name", "address", "ip_address", "date_shift", "constant", "unique", "passport", "pnr_code", "location_generalization", "numeric_variance", "date_round"])
         self.rule_constant = QLineEdit(); self.rule_constant.setPlaceholderText("JSON value for constant")
+        self.rule_type.currentTextChanged.connect(self.update_rule_options_placeholder)
         editrow = QHBoxLayout(); editrow.addWidget(QLabel("Mode")); editrow.addWidget(self.rule_mode); editrow.addWidget(QLabel("Transform")); editrow.addWidget(self.rule_type); editrow.addWidget(self.rule_constant, 1)
         apply_btn = QPushButton("Apply to selected fields"); apply_btn.clicked.connect(self.apply_rule); editrow.addWidget(apply_btn)
         remove_btn = QPushButton("Remove rule"); remove_btn.clicked.connect(self.remove_rule); editrow.addWidget(remove_btn); layout.addLayout(editrow)
@@ -1381,7 +1382,9 @@ class AnonymizerWindow(QMainWindow):
             text = self.rules_text.toPlainText()
             rules = json.loads(text or "{}"); spec = rules.get("tables", {}).get(table, {})
             if col in spec.get("anonymize", {}):
-                transform = spec["anonymize"][col]; self.rule_mode.setCurrentText("Anonymize"); self.rule_type.setCurrentText(transform.get("type", "email")); self.rule_constant.setText(json.dumps(transform.get("value"), ensure_ascii=False) if "value" in transform else "")
+                transform = spec["anonymize"][col]; self.rule_mode.setCurrentText("Anonymize"); self.rule_type.setCurrentText(transform.get("type", "email"))
+                options = {key: value for key, value in transform.items() if key != "type"}
+                self.rule_constant.setText(json.dumps(options.get("value"), ensure_ascii=False) if transform.get("type") == "constant" and "value" in options else (json.dumps(options, ensure_ascii=False) if options else ""))
             elif col in spec.get("preserve", []): self.rule_mode.setCurrentText("Preserve")
             else: self.rule_mode.setCurrentText("Unconfigured")
             self._select_rule_json_entry(text, table, col)
@@ -1398,6 +1401,14 @@ class AnonymizerWindow(QMainWindow):
         browse = menu.addAction(f"Browse source data for {table}")
         if menu.exec(self.rule_tree.viewport().mapToGlobal(position)) == browse:
             self.browse_source_table(table)
+
+    def update_rule_options_placeholder(self, kind: str) -> None:
+        if kind == "constant":
+            self.rule_constant.setPlaceholderText("JSON value for constant")
+        elif kind in {"passport", "location_generalization", "numeric_variance", "date_round"}:
+            self.rule_constant.setPlaceholderText('JSON options, e.g. {"target":"hotel_class"}')
+        else:
+            self.rule_constant.setPlaceholderText("Optional JSON options")
 
     def browse_source_table(self, table: str) -> None:
         """Open Browse data on a source table and load its sample."""
@@ -1491,6 +1502,11 @@ class AnonymizerWindow(QMainWindow):
                     raw = self.rule_constant.text()
                     try: transform["value"] = json.loads(raw)
                     except json.JSONDecodeError: transform["value"] = raw
+                elif self.rule_constant.text().strip():
+                    options = json.loads(self.rule_constant.text())
+                    if not isinstance(options, dict):
+                        raise ValueError("Transformation options must be a JSON object")
+                    transform.update(options)
             for item in selected:
                 table, col = item.text(0), item.text(1)
                 spec = rules.setdefault("tables", {}).setdefault(table, {})
