@@ -129,6 +129,40 @@ Scroll areas keep controls reachable at shorter window heights. **Overall copy p
 
 The **Anonymization rules** tab has a searchable column navigator, rule-status filters, a transformation editor, and a JSON editor. **Tables** shows destination tables that already exist; attempting to copy one offers to mark it as already copied, while **Recreate selected tables** replaces it. **Clear destination data** drops all base tables and can also clear the selected mapping store after a separate confirmation. **Recreate destination DB** requires typing its name. The **Browse data** tab searches across all columns or filters one column and displays up to 200 matching rows. **Test connections** checks both database accounts and reports common authentication or grant errors.
 
+### Anonymization types
+
+Add a transformation to a column under that table's `anonymize` object. These examples show the rule syntax and typical output; generated values are deterministic for the same table, column, and original value. `NULL` values remain `NULL`.
+
+| Type | Example rule | Example output for `alice@example.com` or a representative input |
+| --- | --- | --- |
+| `email` | `{"type": "email"}` | `user123456789@example.invalid` |
+| `phone` | `{"type": "phone"}` | `+15551234567` |
+| `name` | `{"type": "name"}` | `Person01234567` |
+| `address` | `{"type": "address"}` | `1234 Example Street` |
+| `ip_address` | `{"type": "ip_address"}` | IPv4 becomes an address in `10.0.0.0/8`; IPv6 becomes an address in `2001:db8::/32`. Invalid input stops the copy with a column-specific error. |
+| `date_shift` | `{"type": "date_shift"}` | Shifts a date or timestamp by a stable number of days, from 3,650 days earlier to 3,650 days later. Requires a date/time value. |
+| `constant` | `{"type": "constant", "value": "redacted"}` | `redacted` |
+| `unique` | `{"type": "unique"}` | An opaque `anon…` pseudonym derived from a hash of the original value. |
+
+For example, to anonymize a customer's email and phone while replacing a note with a fixed value:
+
+```json
+{
+  "tables": {
+    "customers": {
+      "preserve": [],
+      "anonymize": {
+        "email": {"type": "email"},
+        "phone": {"type": "phone"},
+        "note": {"type": "constant", "value": "redacted"}
+      }
+    }
+  }
+}
+```
+
+Text transformations are intended for text columns; `date_shift` is for date/time columns. The `unique` type creates a deterministic pseudonym, and unique text columns also get collision handling that fits the destination column length. For `constant`, `value` may be any JSON value supported by the destination column. Choose values that satisfy the column's type and constraints. These transformations do not discover every sensitive field automatically: review generated rules and unconfigured columns before copying.
+
 Use **Load config** and **Load rules** to open JSON files, and **Save config as** or **Save rules as** to write new files. Config and rules can be saved to their selected paths. The GUI remembers the last paths and reopens those files at startup. Passwords entered in the window are saved in the config file in plain text; leave a password field blank to use `password_env`. If rules refer to columns missing from the inspected source, copying asks before ignoring those rules. Columns without a rule are copied unchanged.
 
 Use **Save profile** and **Load profile** to keep named config, rules, mapping-store paths, and copy options. Profiles and the GUI's recent paths, table selections, and copy checkpoints are stored in the app configuration directory. Profiles and copy checkpoints use owner-only file permissions. A profile stores the mapping-store path, not a copy of the mapping database. The auto-confirm option skips routine copy and table-action prompts; destructive whole-database actions still require typing the destination name.
