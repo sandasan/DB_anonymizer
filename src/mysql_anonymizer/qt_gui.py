@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit,
+    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit, QMenu,
     QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton,
     QVBoxLayout, QWidget,
 )
@@ -91,6 +91,7 @@ class AnonymizerWindow(QMainWindow):
         self.browse_tables: dict[str, list[dict[str, Any]]] = {"source": [], "destination": []}
         self.mapping_fields: dict[str, list[str]] = {}
         self._pending_lookup_selection: tuple[str, str] | None = None
+        self._pending_browse_table: str | None = None
         self.copy_resume: dict[str, Any] | None = None
         self.active_copy_table: str | None = None
         self.failed_copy_table: str | None = None
@@ -368,6 +369,8 @@ class AnonymizerWindow(QMainWindow):
         controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status); layout.addLayout(controls)
         self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Rule status"])
         self.rule_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self.rule_tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.rule_tree.customContextMenuRequested.connect(self.show_rule_context_menu)
         self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
@@ -805,6 +808,9 @@ class AnonymizerWindow(QMainWindow):
             self.log_message("\n".join(matches) if matches else f"No matching value found for {table}.{column} = {value!r}.")
         elif kind == "browse_tables":
             _, role, tables = result; self.browse_tables[role] = tables; self.filter_browse_tables(); self.status.setText(f"Loaded {len(tables)} {role} tables.")
+            if role == "source" and self._pending_browse_table:
+                table, self._pending_browse_table = self._pending_browse_table, None
+                self.browse_source_table(table)
         elif kind == "browse_rows": self.show_browse_rows(result[1], result[2], result[3]); self.status.setText(f"Showing {len(result[2])} rows from {result[1]}.")
         elif kind == "clear": self.copied_tables.clear(); self.destination_tables.difference_update(result[1]); self.render_tables(); self.save_state(); self.log_message(f"Cleared {len(result[1])} destination tables and {result[2]} mapping entries.")
 
@@ -1380,6 +1386,33 @@ class AnonymizerWindow(QMainWindow):
             else: self.rule_mode.setCurrentText("Unconfigured")
             self._select_rule_json_entry(text, table, col)
         except Exception: pass
+
+    def show_rule_context_menu(self, position) -> None:
+        """Offer source table browsing from a rule row."""
+        item = self.rule_tree.itemAt(position)
+        if item is None:
+            return
+        self.rule_tree.setCurrentItem(item)
+        table = item.text(0)
+        menu = QMenu(self.rule_tree)
+        browse = menu.addAction(f"Browse source data for {table}")
+        if menu.exec(self.rule_tree.viewport().mapToGlobal(position)) == browse:
+            self.browse_source_table(table)
+
+    def browse_source_table(self, table: str) -> None:
+        """Open Browse data on a source table and load its sample."""
+        self.tabs.setCurrentWidget(self.browse_tab)
+        self.browse_role.setCurrentText("source")
+        self.browse_filter.clear()
+        self.browse_search_all.clear()
+        self.browse_column_value.clear()
+        if not any(entry.get("name") == table for entry in self.browse_tables.get("source", [])):
+            self._pending_browse_table = table
+            self.load_browse_tables()
+            return
+        self.filter_browse_tables()
+        self.browse_table.setCurrentText(table)
+        self.search_browse()
 
     def _select_rule_json_entry(self, text: str, table: str, column: str) -> None:
         """Highlight the selected table/column entry in the JSON rules editor."""
