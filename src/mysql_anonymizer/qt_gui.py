@@ -442,11 +442,12 @@ class AnonymizerWindow(QMainWindow):
         self.rule_search = QLineEdit(); self.rule_search.setPlaceholderText("Search tables or columns…"); self.rule_search.textChanged.connect(self.refresh_rules)
         self.rule_status = QComboBox(); self.rule_status.addItems(["All statuses", "Anonymized", "Preserved", "Unconfigured", "Needs attention"]); self.rule_status.currentTextChanged.connect(self.refresh_rules)
         controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status); layout.addLayout(controls)
-        self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Rule status"])
+        self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Source type", "Output type", "Compatibility", "Rule status"])
         self.rule_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.rule_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.rule_tree.customContextMenuRequested.connect(self.show_rule_context_menu)
-        self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
+        for index in (0, 1, 2, 3, 4): self.rule_tree.header().setSectionResizeMode(index, QHeaderView.ResizeToContents)
+        self.rule_tree.header().setSectionResizeMode(5, QHeaderView.Stretch)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
         self.rule_type = QComboBox(); self.rule_type.addItems(["email", "url", "phone", "payment_key", "password", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "date_shift", "constant", "unique", "passport", "pnr_code", "location_generalization", "numeric_variance", "coordinate_round", "date_round"])
@@ -455,10 +456,19 @@ class AnonymizerWindow(QMainWindow):
         editrow = QHBoxLayout(); editrow.addWidget(QLabel("Mode")); editrow.addWidget(self.rule_mode); editrow.addWidget(QLabel("Transform")); editrow.addWidget(self.rule_type); editrow.addWidget(self.rule_constant, 1)
         apply_btn = QPushButton("Apply to selected fields"); apply_btn.clicked.connect(self.apply_rule); editrow.addWidget(apply_btn)
         remove_btn = QPushButton("Remove rule"); remove_btn.clicked.connect(self.remove_rule); editrow.addWidget(remove_btn); layout.addLayout(editrow)
+        self.rule_compatibility_notice = QLabel()
+        self.rule_compatibility_notice.setObjectName("ruleCompatibilityNotice")
+        self.rule_compatibility_notice.setWordWrap(True)
+        self.rule_compatibility_notice.setStyleSheet("QLabel#ruleCompatibilityNotice { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 6px; }")
+        self.rule_compatibility_notice.hide()
+        layout.addWidget(self.rule_compatibility_notice)
         self.rules_text = QPlainTextEdit(); self.rules_text.setMinimumHeight(280)
         self._rules_refresh_timer = QTimer(self); self._rules_refresh_timer.setSingleShot(True); self._rules_refresh_timer.setInterval(250); self._rules_refresh_timer.timeout.connect(self.refresh_rules)
         self.rules_text.textChanged.connect(lambda: self._rules_refresh_timer.start())
         self.rules_text.textChanged.connect(self._update_save_rules_button)
+        self.rule_type.currentTextChanged.connect(self._update_rule_compatibility_notice)
+        self.rule_constant.textChanged.connect(self._update_rule_compatibility_notice)
+        self.rule_mode.currentTextChanged.connect(self._update_rule_compatibility_notice)
         layout.addWidget(self.rules_text, 2)
         self.rule_tree.itemSelectionChanged.connect(self.load_rule_selection)
         self._saved_rules_snapshot = self._rules_snapshot(self.rules_text.toPlainText())
@@ -1448,35 +1458,163 @@ class AnonymizerWindow(QMainWindow):
         )
 
     # Rule navigator/editor
+    _rule_text_types = {"char", "varchar", "tinytext", "text", "mediumtext", "longtext"}
+    _rule_numeric_types = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
+    _rule_date_types = {"date", "datetime", "timestamp"}
+    _rule_text_transforms = {"email", "url", "phone", "payment_key", "password", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
+
+    @staticmethod
+    def _type_category(data_type: str) -> str:
+        kind = data_type.lower()
+        if kind in AnonymizerWindow._rule_text_types:
+            return "Text"
+        if kind in {"enum", "set"}:
+            return "Enum/set"
+        if kind in AnonymizerWindow._rule_numeric_types:
+            return "Numeric"
+        if kind in AnonymizerWindow._rule_date_types:
+            return "Date/time"
+        if kind in {"json"}:
+            return "JSON"
+        if kind in {"binary", "varbinary", "tinyblob", "blob", "mediumblob", "longblob"}:
+            return "Binary"
+        if kind in {"bool", "boolean"}:
+            return "Boolean"
+        return "Other"
+
+    @staticmethod
+    def _rule_output_type(rule: dict[str, Any] | None) -> str:
+        if not isinstance(rule, dict):
+            return "Unchanged"
+        kind = rule.get("type")
+        if kind in AnonymizerWindow._rule_text_transforms:
+            return "Text"
+        if kind in {"numeric_variance", "coordinate_round"}:
+            return "Numeric"
+        if kind in {"date_shift", "date_round"}:
+            return "Date/time"
+        if kind == "constant":
+            value = rule.get("value")
+            if isinstance(value, bool): return "Boolean"
+            if isinstance(value, (int, float)): return "Numeric"
+            if isinstance(value, str): return "Text/string"
+            if value is None: return "NULL"
+            return "JSON"
+        return "Unknown"
+
+    @classmethod
+    def _rule_compatibility(cls, data_type: str, column: str,
+                            rule: dict[str, Any] | None) -> tuple[bool, str]:
+        if not isinstance(rule, dict):
+            return True, ""
+        kind = rule.get("type")
+        category = cls._type_category(data_type)
+        if kind in cls._rule_text_transforms:
+            compatible = category == "Text"
+        elif kind in {"numeric_variance", "coordinate_round"}:
+            compatible = category == "Numeric"
+            if kind == "coordinate_round":
+                compatible = compatible and column.lower() in {"lat", "latitude", "lon", "lng", "long", "longitude"}
+        elif kind in {"date_shift", "date_round"}:
+            compatible = category == "Date/time"
+        elif kind == "constant":
+            value = rule.get("value")
+            value_category = ("Boolean" if isinstance(value, bool) else
+                              "Numeric" if isinstance(value, (int, float)) else
+                              "Text" if isinstance(value, str) else
+                              "JSON" if isinstance(value, (dict, list)) else "NULL")
+            compatible = (value is None or value_category == category
+                          or (category in {"Text", "Enum/set"} and value_category == "Text")
+                          or (category == "JSON" and value_category in {"Boolean", "Numeric", "Text", "JSON", "NULL"}))
+        else:
+            compatible = False
+        if compatible:
+            return True, ""
+        return False, f"{cls._rule_output_type(rule)} output is not compatible with {data_type or 'unknown source type'}"
+
+    def _source_column(self, table: str, column: str) -> dict[str, Any] | None:
+        for source_table in self.tables:
+            if source_table.get("name") == table:
+                return next((item for item in source_table.get("columns", [])
+                             if item.get("COLUMN_NAME") == column), None)
+        return None
+
+    def _update_rule_compatibility_notice(self, *_args) -> None:
+        if not hasattr(self, "rule_compatibility_notice"):
+            return
+        selected = self.rule_tree.selectedItems()
+        if not selected or self.rule_mode.currentText() != "Anonymize":
+            self.rule_compatibility_notice.hide()
+            return
+        kind = self.rule_type.currentText()
+        rule: dict[str, Any] = {"type": kind}
+        if kind == "constant":
+            raw = self.rule_constant.text()
+            try:
+                rule["value"] = json.loads(raw)
+            except json.JSONDecodeError:
+                rule["value"] = raw
+        elif self.rule_constant.text().strip():
+            try:
+                options = json.loads(self.rule_constant.text())
+                if isinstance(options, dict):
+                    rule.update(options)
+            except json.JSONDecodeError:
+                pass
+        issues = []
+        for item in selected:
+            source = self._source_column(item.text(0), item.text(1))
+            if source is None:
+                continue
+            compatible, reason = self._rule_compatibility(source.get("DATA_TYPE", ""), item.text(1), rule)
+            if not compatible:
+                issues.append(f"{item.text(0)}.{item.text(1)}: {reason}")
+        if issues:
+            self.rule_compatibility_notice.setText("Incompatible anonymization type: " + "; ".join(issues))
+            self.rule_compatibility_notice.show()
+        else:
+            self.rule_compatibility_notice.hide()
+
     def refresh_rules(self) -> None:
         if not hasattr(self, "rule_tree"): return
         try:
             data = json.loads(self.rules_text.toPlainText() or "{}"); table_rules = data.get("tables", {})
-            source = {t["name"]: {c["COLUMN_NAME"] for c in t["columns"]} for t in self.tables}
+            source = {t["name"]: {c["COLUMN_NAME"]: c for c in t["columns"]} for t in self.tables}
             query = self.rule_search.text().casefold(); status_filter = self.rule_status.currentText()
             self.rule_tree.clear()
             for table in sorted(set(source) | set(table_rules)):
                 rule = table_rules.get(table, {}); preserve = set(rule.get("preserve", [])); anonymize = rule.get("anonymize", {})
-                cols = sorted(source.get(table, set()) | preserve | set(anonymize))
+                cols = sorted(set(source.get(table, {})) | preserve | set(anonymize))
                 for col in cols:
+                    source_column = source.get(table, {}).get(col)
                     if self.tables and table not in source: status = "Table not in source"
-                    elif self.tables and col not in source.get(table, set()): status = "Column not in source"
+                    elif self.tables and source_column is None: status = "Column not in source"
                     elif col in preserve and col in anonymize: status = "Conflict: preserve + anonymize"
                     elif col in anonymize: status = "Anonymized (" + str(anonymize[col].get("type", "unknown")) + ")"
                     elif col in preserve: status = "Preserved"
                     else: status = "Unconfigured"
-                    if query and query not in f"{table} {col} {status}".casefold(): continue
+                    configured_rule = anonymize.get(col) if isinstance(anonymize, dict) else None
+                    data_type = source_column.get("DATA_TYPE", "") if source_column else ""
+                    source_type = source_column.get("COLUMN_TYPE", data_type) if source_column else "—"
+                    output_type = self._rule_output_type(configured_rule)
+                    compatible, reason = self._rule_compatibility(data_type, col, configured_rule)
+                    compatibility = "—" if not configured_rule or source_column is None else ("Compatible" if compatible else "Incompatible")
+                    if query and query not in f"{table} {col} {source_type} {output_type} {compatibility} {status}".casefold(): continue
                     if status_filter == "Anonymized" and not status.startswith("Anonymized"): continue
                     if status_filter == "Preserved" and status != status_filter: continue
                     if status_filter == "Unconfigured" and status != status_filter: continue
-                    if status_filter == "Needs attention" and status not in {"Table not in source", "Column not in source", "Conflict: preserve + anonymize", "Unconfigured"}: continue
-                    item = QTreeWidgetItem([table, col, status]); self.rule_tree.addTopLevelItem(item)
+                    if status_filter == "Needs attention" and status not in {"Table not in source", "Column not in source", "Conflict: preserve + anonymize", "Unconfigured"} and compatible: continue
+                    tooltip = reason if not compatible else ""
+                    item = QTreeWidgetItem([table, col, source_type or "—", output_type, compatibility, status]); item.setToolTip(4, tooltip); self.rule_tree.addTopLevelItem(item)
+            self._update_rule_compatibility_notice()
         except (json.JSONDecodeError, AttributeError, TypeError) as exc:
             if hasattr(self, "rule_tree"): self.rule_tree.clear()
 
     def load_rule_selection(self) -> None:
         selected = self.rule_tree.selectedItems()
-        if not selected: return
+        if not selected:
+            self._update_rule_compatibility_notice()
+            return
         table, col = selected[0].text(0), selected[0].text(1)
         try:
             text = self.rules_text.toPlainText()
@@ -1488,6 +1626,7 @@ class AnonymizerWindow(QMainWindow):
             elif col in spec.get("preserve", []): self.rule_mode.setCurrentText("Preserve")
             else: self.rule_mode.setCurrentText("Unconfigured")
             self._select_rule_json_entry(text, table, col)
+            self._update_rule_compatibility_notice()
         except Exception: pass
 
     def show_rule_context_menu(self, position) -> None:
