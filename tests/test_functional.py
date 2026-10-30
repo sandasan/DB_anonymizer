@@ -100,6 +100,14 @@ class TransformationTests(unittest.TestCase):
         self.assertTrue(first.endswith("@example.invalid"))
         self.assertIsNone(transform(None, rule, "users", "email"))
 
+    def test_url_transform_replaces_original_with_deterministic_synthetic_url(self):
+        rule = {"type": "url"}
+        result = transform("https://private.example/path?id=123", rule, "users", "website")
+        self.assertEqual(result, transform("https://private.example/path?id=123", rule, "users", "website"))
+        self.assertTrue(result.startswith("https://example.invalid/"))
+        self.assertNotIn("private.example", result)
+        self.assertIsNone(transform(None, rule, "users", "website"))
+
     def test_date_shift_preserves_type_and_invalid_value_fails(self):
         value = date(2000, 1, 1)
         shifted = transform(value, {"type": "date_shift"}, "users", "birthday")

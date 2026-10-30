@@ -8,11 +8,12 @@ from .transformations import TEXT_DATA_TYPES
 
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
 _NUMERIC_DATA_TYPES = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
-_TEXT_TRANSFORMS = {"email", "phone", "payment_key", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
+_TEXT_TRANSFORMS = {"email", "url", "phone", "payment_key", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
 _SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "constant"}
 _TRANSFORM_MAX_LENGTH = {
     # Keep generated emails within common VARCHAR(32) columns.
     "email": len("user") + 12 + len("@example.invalid"),
+    "url": len("https://example.invalid/") + 24,
     "phone": len("+1555") + 7,
     "payment_key": len("test_") + 32,
     "card_mask": len("**** **** **** 0000"),
@@ -89,6 +90,8 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
                     preserve.append(name)
                 else:
                     anonymize[name] = {"type": "email"}
+            elif is_text and re.search(r"(?:^|_)(?:url|uri|website|homepage|web_url)(?:_|$)", low):
+                anonymize[name] = {"type": "url"}
             elif is_text and re.search(r"phone|mobile|telephone|(^|_)tel(_|$)", hints):
                 anonymize[name] = {"type": "phone"}
             elif is_text and ("ip" in tokens or "ipaddress" in tokens):

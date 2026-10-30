@@ -136,6 +136,7 @@ Add a transformation to a column under that table's `anonymize` object. These ex
 | Type | Example rule | Example output for a representative input |
 | --- | --- | --- |
 | `email` | `{"type": "email"}` | `user123456789@example.invalid` |
+| `url` | `{"type": "url"}` | Replaced with a deterministic synthetic URL under `https://example.invalid/`. |
 | `phone` | `{"type": "phone"}` | `+15551234567` |
 | `payment_key` | `{"type": "payment_key"}` | A synthetic `test_…` key; suitable for LiqPay or other payment credentials. This explicit type is allowed for columns named `key`, `token`, or `secret`. |
 | `card_mask` | `{"type": "card_mask"}` | `5168********1234` becomes `**** **** **** 0427`; all original card digits are replaced with a deterministic synthetic last four. |

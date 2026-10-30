@@ -23,6 +23,9 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         return rule["value"]
     if kind == "email":
         return f"user{stable_number(table, column, value, 10**12)}@example.invalid"
+    if kind == "url":
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).hexdigest()
+        return f"https://example.invalid/{digest[:24]}"
     if kind == "phone":
         return f"+1555{stable_number(table, column, value, 10**7):07d}"
     if kind == "payment_key":
