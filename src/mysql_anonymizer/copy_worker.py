@@ -227,7 +227,7 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                 )
                 params.extend([f"%{args['filter_value']}%"] * len(selected_columns))
             where = " WHERE " + " AND ".join(conditions) if conditions else ""
-            result_columns = columns
+            result_columns = selected_columns or columns
             selected_sql = ", ".join(f"`{column.replace('`', '``')}`" for column in result_columns)
             cursor.execute(
                 f"SELECT {selected_sql} FROM `{table.replace('`', '``')}`{where} LIMIT 201",

@@ -92,7 +92,7 @@ class CheckableComboBox(QComboBox):
         self.setEditable(True)
         self.lineEdit().setReadOnly(True)
         self.lineEdit().setPlaceholderText("All columns")
-        self.view().pressed.connect(self._toggle_item)
+        self.view().clicked.connect(self._normalize_selection)
 
     def add_checkable_item(self, text: str, data: Any = None, checked: bool = False) -> None:
         item = QStandardItem(text)
@@ -103,12 +103,10 @@ class CheckableComboBox(QComboBox):
         self.model().appendRow(item)
         self._update_text()
 
-    def _toggle_item(self, index) -> None:
+    def _normalize_selection(self, index) -> None:
         item = self.model().itemFromIndex(index)
         if item is None:
             return
-        item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
-                           else Qt.CheckState.Checked)
         if item.data(Qt.ItemDataRole.UserRole) is None and item.checkState() == Qt.CheckState.Checked:
             for row in range(1, self.count()):
                 self.model().item(row).setCheckState(Qt.CheckState.Unchecked)
