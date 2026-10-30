@@ -207,6 +207,9 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
         cursor = conn.cursor()
         try:
             conditions, params = [], []
+            selected_column = args["filter_column"]
+            if selected_column and selected_column not in columns:
+                raise ValueError("Selected filter column is not in the table")
             if args["search"]:
                 conditions.append(
                     "(" + " OR ".join(
@@ -215,23 +218,23 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                     ) + ")"
                 )
                 params.extend([f"%{args['search']}%"] * len(columns))
-            if args["filter_column"] and args["filter_value"]:
-                if args["filter_column"] not in columns:
-                    raise ValueError("Selected filter column is not in the table")
+            if selected_column and args["filter_value"]:
                 conditions.append(
-                    f"CAST(`{args['filter_column'].replace('`', '``')}` AS CHAR) LIKE %s"
+                    f"CAST(`{selected_column.replace('`', '``')}` AS CHAR) LIKE %s"
                 )
                 params.append(f"%{args['filter_value']}%")
             where = " WHERE " + " AND ".join(conditions) if conditions else ""
+            result_columns = [selected_column] if selected_column else columns
+            selected_sql = ", ".join(f"`{column.replace('`', '``')}`" for column in result_columns)
             cursor.execute(
-                f"SELECT * FROM `{table.replace('`', '``')}`{where} LIMIT 201",
+                f"SELECT {selected_sql} FROM `{table.replace('`', '``')}`{where} LIMIT 201",
                 tuple(params),
             )
             rows = [
                 [None if value is None else str(value) for value in row]
                 for row in cursor.fetchall()
             ]
-            return ["browse_rows", table, columns, rows[:200]]
+            return ["browse_rows", table, result_columns, rows[:200]]
         finally:
             cursor.close()
             conn.close()

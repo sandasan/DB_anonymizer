@@ -411,18 +411,19 @@ class AnonymizerWindow(QMainWindow):
         layout = self._scroll_page(self.browse_tab)
         form = QGridLayout()
         self.browse_role = QComboBox(); self.browse_role.addItems(["source", "destination"]); self.browse_role.currentTextChanged.connect(self.filter_browse_tables)
-        self.browse_table = QComboBox(); self.browse_table.currentTextChanged.connect(self.search_browse)
+        self.browse_table = QComboBox(); self.browse_table.currentTextChanged.connect(self._browse_table_changed)
         self.browse_filter = QLineEdit(); self.browse_filter.setPlaceholderText("Filter tables"); self.browse_filter.textChanged.connect(self.filter_browse_tables)
         self.browse_search_all = QLineEdit(); self.browse_search_all.setPlaceholderText("Search all columns")
-        self.browse_column = QComboBox(); self.browse_column.setEditable(True)
+        self.browse_column = QComboBox(); self.browse_column.addItem("All columns", None)
         self.browse_column_value = QLineEdit(); self.browse_column_value.setPlaceholderText("Column contains…")
         load = QPushButton("Load tables"); load.clicked.connect(self.load_browse_tables)
         search = QPushButton("Search / refresh"); search.clicked.connect(self.search_browse)
+        reset_column = QPushButton("Reset column filter"); reset_column.clicked.connect(self.reset_browse_column_filter)
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
         form.addWidget(QLabel("Filter tables"), 1, 0); form.addWidget(self.browse_filter, 1, 1, 1, 5)
         form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 5)
-        form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3, 1, 2); form.addWidget(search, 3, 5)
+        form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         layout.addLayout(form)
         self.browse_view = QTableWidget(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
         self.browse_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -1615,8 +1616,31 @@ class AnonymizerWindow(QMainWindow):
         if current in names: self.browse_table.setCurrentText(current)
         self.browse_table.blockSignals(False)
         item = next((t for t in self.browse_tables.get(role, []) if t["name"] == self.browse_table.currentText()), None)
+        self._set_browse_columns(item)
+
+    def _set_browse_columns(self, item: dict[str, Any] | None) -> None:
+        selected = self.browse_column.currentData()
+        self.browse_column.blockSignals(True)
         self.browse_column.clear()
-        if item: self.browse_column.addItems([c["COLUMN_NAME"] for c in item["columns"]])
+        self.browse_column.addItem("All columns", None)
+        if item:
+            for column in item["columns"]:
+                name = column["COLUMN_NAME"]
+                self.browse_column.addItem(name, name)
+        index = self.browse_column.findData(selected)
+        self.browse_column.setCurrentIndex(index if index >= 0 else 0)
+        self.browse_column.blockSignals(False)
+
+    def _browse_table_changed(self, table: str) -> None:
+        role = self.browse_role.currentText()
+        item = next((t for t in self.browse_tables.get(role, []) if t["name"] == table), None)
+        self._set_browse_columns(item)
+        self.search_browse()
+
+    def reset_browse_column_filter(self) -> None:
+        self.browse_column.setCurrentIndex(0)
+        self.browse_column_value.clear()
+        self.search_browse()
 
     def search_browse(self, *_args) -> None:
         table = self.browse_table.currentText(); role = self.browse_role.currentText()
@@ -1629,7 +1653,7 @@ class AnonymizerWindow(QMainWindow):
             "browse_rows",
             {"role": role, "settings": config[role], "table": table,
              "columns": columns, "search": self.browse_search_all.text(),
-             "filter_column": self.browse_column.currentText(),
+             "filter_column": self.browse_column.currentData(),
              "filter_value": self.browse_column_value.text()},
             f"Reading {role}.{table}…",
         )
