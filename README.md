@@ -140,6 +140,11 @@ Add a transformation to a column under that table's `anonymize` object. These ex
 | `payment_key` | `{"type": "payment_key"}` | A synthetic `test_…` key; suitable for LiqPay or other payment credentials. This explicit type is allowed for columns named `key`, `token`, or `secret`. |
 | `card_mask` | `{"type": "card_mask"}` | `5168********1234` becomes `**** **** **** 0427`; all original card digits are replaced with a deterministic synthetic last four. |
 | `card_number` | `{"type": "card_number"}` | Replaced with a deterministic synthetic 16-digit value with a valid Luhn checksum and a leading `0` outside standard payment network prefixes. |
+| `card_payexpirydate` | `{"type": "card_payexpirydate"}` | A deterministic synthetic expiry month/year in `MM/YY` format. |
+| `card_validitydate` | `{"type": "card_validitydate"}` | A deterministic synthetic date in `DD/MM/YYYY` format. |
+| `card_expirydate` | `{"type": "card_expirydate"}` | A deterministic synthetic day/month in `DD/MM` format. |
+| `card_securitycode` | `{"type": "card_securitycode"}` | A synthetic three-digit code; the original security code is discarded. |
+| `card_type` | `{"type": "card_type"}` | A deterministic replacement from `VISA`, `MASTERCARD`, `AMEX`, or `DISCOVER`. |
 | `description` | `{"type": "description"}` | `redacted` (replaces comments, transaction descriptions, and other free text with a fixed placeholder). |
 | `name` | `{"type": "name"}` | `Person01234567` |
 | `entity_name` | `{"type": "entity_name"}` | A generic deterministic label such as `Entity01234567`, suitable for hotel, company, or other non-person names. |

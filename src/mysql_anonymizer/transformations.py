@@ -84,6 +84,23 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     n = stable_number(table, column, value, 10**12)
     if kind == "name":
         return f"Person{n % 100000000:08d}"
+    if kind == "card_payexpirydate":
+        month = n % 12 + 1
+        year = 30 + (n // 12) % 20
+        return f"{month:02d}/{year:02d}"
+    if kind == "card_validitydate":
+        day = n % 28 + 1
+        month = (n // 28) % 12 + 1
+        year = 2000 + (n // 336) % 30
+        return f"{day:02d}/{month:02d}/{year:04d}"
+    if kind == "card_expirydate":
+        day = n % 28 + 1
+        month = (n // 28) % 12 + 1
+        return f"{day:02d}/{month:02d}"
+    if kind == "card_securitycode":
+        return f"{n % 1000:03d}"
+    if kind == "card_type":
+        return ("VISA", "MASTERCARD", "AMEX", "DISCOVER")[n % 4]
     if kind == "entity_name":
         return f"Entity{n % 100000000:08d}"
     if kind == "address":
