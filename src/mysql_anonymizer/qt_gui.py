@@ -190,7 +190,8 @@ class AnonymizerWindow(QMainWindow):
         visibility = QHBoxLayout()
         visibility.addWidget(QLabel("Show:"))
         for label, attr in (("Setup", "setup_panel"), ("Actions", "actions_panel"),
-                            ("Progress", "progress_panel"), ("Activity log", "log")):
+                            ("Progress", "progress_panel"), ("Activity log", "log"),
+                            ("Raw rules JSON", "rules_text")):
             toggle = QToolButton(); toggle.setText(label); toggle.setCheckable(True); toggle.setChecked(True)
             toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             toggle.toggled.connect(lambda shown, name=attr: getattr(self, name).setVisible(shown))
