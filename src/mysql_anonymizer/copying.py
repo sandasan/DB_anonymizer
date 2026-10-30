@@ -659,7 +659,8 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                                                     text_column_length(column_info[col]["COLUMN_TYPE"]),
                                                     mapping, used)
                         values[index] = new_value
-                        if mapping_db is not None and original_value is not None and new_value is not None:
+                        if (mapping_db is not None and rule.get("type") != "password"
+                                and original_value is not None and new_value is not None):
                             original_text = str(original_value)
                             map_key = (col, original_text)
                             if map_key not in mapping_seen:

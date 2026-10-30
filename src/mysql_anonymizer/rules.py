@@ -8,7 +8,7 @@ from .transformations import TEXT_DATA_TYPES
 
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
 _NUMERIC_DATA_TYPES = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
-_TEXT_TRANSFORMS = {"email", "url", "phone", "payment_key", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
+_TEXT_TRANSFORMS = {"email", "url", "phone", "payment_key", "password", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
 _SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "coordinate_round", "constant"}
 _TRANSFORM_MAX_LENGTH = {
     # Keep generated emails within common VARCHAR(32) columns.
@@ -16,6 +16,7 @@ _TRANSFORM_MAX_LENGTH = {
     "url": len("https://example.invalid/") + 24,
     "phone": len("+1555") + 7,
     "payment_key": len("test_") + 32,
+    "password": 13,
     "card_mask": len("**** **** **** 0000"),
     "card_number": 16,
     "card_payexpirydate": 5,
@@ -163,8 +164,14 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 and re.search(r"key|token|secret", col, re.I)
                 and not re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|salt", col, re.I)
             )
-            if auth_field and not payment_credential_field:
+            password_transform = (
+                rule.get("type") == "password"
+                and re.search(r"password|passwd|pwd|pass.?hash", col, re.I)
+            )
+            if auth_field and not (payment_credential_field or password_transform):
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
+            if rule.get("type") == "password" and not password_transform:
+                raise ValueError(f"password transformation requires a password or password-hash column: {tn}.{col}")
             if rule.get("type") in _TEXT_TRANSFORMS and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                 raise ValueError(
                     f"Text transformation {rule.get('type')!r} configured for non-text column "
@@ -202,7 +209,7 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"Unsupported passport country format for {tn}.{col}; supported country is 'GB'")
             column_type = cols[col]["COLUMN_TYPE"]
             length_match = re.fullmatch(r"(?:var)?char\((\d+)\)", column_type, re.I)
-            if length_match and cols[col]["COLUMN_KEY"] != "UNI":
+            if length_match and (cols[col]["COLUMN_KEY"] != "UNI" or kind == "password"):
                 max_length = int(length_match.group(1))
                 # The copier shortens unique pseudonyms to the declared column
                 # width and resolves collisions, including for narrow unique indexes.

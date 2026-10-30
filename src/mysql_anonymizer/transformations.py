@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import re
+import secrets
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -21,6 +22,11 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     kind = rule["type"]
     if kind == "constant":
         return rule["value"]
+    if kind == "password":
+        # Django and several other hash verifiers treat a leading ! as an
+        # unusable password. Random suffixes avoid retaining value equality
+        # and keep outputs distinct if the column has a unique index.
+        return "!" + secrets.token_hex(6)
     if kind == "email":
         return f"user{stable_number(table, column, value, 10**12)}@example.invalid"
     if kind == "url":
