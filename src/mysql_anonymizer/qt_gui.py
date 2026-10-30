@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import base64
 import faulthandler
 import json
 import os
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote
 
-from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, QDateTime
+from PySide6.QtCore import QByteArray, QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, QDateTime
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
@@ -174,6 +175,7 @@ class AnonymizerWindow(QMainWindow):
         self._load_state()
         self.load_config()
         self.load_rules()
+        self._restore_rule_tree_selection()
         startup_tables_view = copy.deepcopy(getattr(self, "tables_view_state", {}))
         self.load_profiles()
         if getattr(self, "last_profile", "") and self.profile_box.currentText() == self.last_profile:
@@ -181,6 +183,7 @@ class AnonymizerWindow(QMainWindow):
         if startup_tables_view:
             self._load_tables_view_config(startup_tables_view)
             self.save_state()
+        self._install_interface_state_tracking()
         QTimer.singleShot(250, self._offer_resume)
 
     @staticmethod
@@ -196,6 +199,10 @@ class AnonymizerWindow(QMainWindow):
     @classmethod
     def _checkpoint_path(cls) -> Path:
         return cls._state_file().with_name("copy_resume.json")
+
+    @classmethod
+    def _interface_defaults_path(cls) -> Path:
+        return cls._state_file().with_name("gui_interface_defaults.json")
 
     @classmethod
     def _error_log_path(cls) -> Path:
@@ -249,6 +256,9 @@ class AnonymizerWindow(QMainWindow):
         self.mapping_path = ""
         self.profile_config: dict[str, Any] | None = None
         self.saved_selection: list[str] = []
+        self._pending_selected_rule_fields: list[list[str]] = []
+        self._pending_interface_browse_table: tuple[str, str] | None = None
+        self._pending_interface_browse_columns: list[str] = []
         self.fields: dict[str, dict[str, QLineEdit]] = {}
         self.passwords: dict[str, QLineEdit] = {}
 
@@ -258,13 +268,26 @@ class AnonymizerWindow(QMainWindow):
         root.setContentsMargins(12, 10, 12, 8)
         visibility = QHBoxLayout()
         visibility.addWidget(QLabel("Show:"))
+        self.visibility_toggles: dict[str, QToolButton] = {}
+        self.visibility_targets: dict[str, str] = {}
         for label, attr in (("Setup", "setup_panel"), ("Actions", "actions_panel"),
                             ("Progress", "progress_panel"), ("Activity log", "log"),
                             ("Raw rules JSON", "rules_text")):
             toggle = QToolButton(); toggle.setText(label); toggle.setCheckable(True); toggle.setChecked(True)
             toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
             toggle.toggled.connect(lambda shown, name=attr: getattr(self, name).setVisible(shown))
+            self.visibility_toggles[label] = toggle
+            self.visibility_targets[label] = attr
             visibility.addWidget(toggle)
+        visibility.addSpacing(12)
+        self.save_interface_default_btn = QPushButton("Save current as default")
+        self.save_interface_default_btn.setToolTip("Save the current window layout and interface options as your default")
+        self.save_interface_default_btn.clicked.connect(self.save_interface_defaults)
+        self.restore_interface_default_btn = QPushButton("Restore default")
+        self.restore_interface_default_btn.setToolTip("Restore the interface settings saved as default")
+        self.restore_interface_default_btn.clicked.connect(self.restore_interface_defaults)
+        visibility.addWidget(self.save_interface_default_btn)
+        visibility.addWidget(self.restore_interface_default_btn)
         visibility.addStretch(1)
         root.addLayout(visibility)
         paths = QFormLayout()
@@ -363,7 +386,7 @@ class AnonymizerWindow(QMainWindow):
 
     def _build_connections(self) -> None:
         layout = self._scroll_page(self.connections_tab)
-        splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Horizontal); self.connections_splitter = splitter
         for role in ("source", "destination"):
             group = QGroupBox(role.title()); form = QFormLayout(group)
             fields: dict[str, QLineEdit] = {}
@@ -571,6 +594,7 @@ class AnonymizerWindow(QMainWindow):
                 self.inspection_snapshot = state.get("inspection_snapshot")
                 self.last_profile = state.get("last_profile", "")
                 self.tables_view_state = state.get("tables_view", {}) if isinstance(state.get("tables_view"), dict) else {}
+                self._startup_interface_settings = state.get("interface_settings", {}) if isinstance(state.get("interface_settings"), dict) else {}
                 self.selected_top_check.blockSignals(True)
                 self.selected_top_check.setChecked(bool(state.get("show_selected_tables_on_top", False)))
                 self.selected_top_check.blockSignals(False)
@@ -579,8 +603,12 @@ class AnonymizerWindow(QMainWindow):
         self.auto_check.blockSignals(True)
         self.auto_check.setChecked(self.auto_confirm)
         self.auto_check.blockSignals(False)
+        if getattr(self, "_startup_interface_settings", None):
+            self._apply_interface_settings(self._startup_interface_settings, persist=False)
 
     def save_state(self) -> None:
+        if getattr(self, "_restoring_interface_settings", False):
+            return
         path = self._state_file()
         try:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -594,10 +622,208 @@ class AnonymizerWindow(QMainWindow):
                      "show_selected_tables_on_top": self.selected_top_check.isChecked()}
             state["last_profile"] = self.profile_box.currentText()
             state["tables_view"] = self._tables_view_config()
+            state["interface_settings"] = self._interface_settings_snapshot()
             if self.inspection_snapshot: state["inspection_snapshot"] = self.inspection_snapshot
             path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8"); path.chmod(0o600)
         except OSError as exc:
             if hasattr(self, "log"): self.log_message(f"Could not save app state: {exc}")
+
+    @staticmethod
+    def _encode_qbytearray(value) -> str:
+        return base64.b64encode(bytes(value)).decode("ascii")
+
+    def _interface_settings_snapshot(self) -> dict[str, Any]:
+        headers = {}
+        for name, header in (
+            ("tables", self.table_view.header()),
+            ("rules", self.rule_tree.header()),
+            ("browse", self.browse_view.horizontalHeader()),
+        ):
+            headers[name] = self._encode_qbytearray(header.saveState())
+        checkboxes = {box.text(): box.isChecked() for box in self.findChildren(QCheckBox)}
+        combos = {
+            "rule_status": self.rule_status.currentText(),
+            "rule_compatibility_status": str(self.rule_compatibility_status_filter.currentData() or "all"),
+            "rule_mode": self.rule_mode.currentText(),
+            "rule_type": self.rule_type.currentText(),
+            "lookup_table": self.lookup_table.currentText(),
+            "lookup_column": self.lookup_column.currentText(),
+            "lookup_direction": self.lookup_direction.currentData(),
+            "browse_role": self.browse_role.currentText(),
+            "browse_table": self.browse_table.currentText(),
+        }
+        filters = {
+            "table": self.table_filter.text(),
+            "rules": self.rule_search.text(),
+            "lookup_table": self.lookup_table_filter.text(),
+            "lookup_column": self.lookup_column_filter.text(),
+            "browse_table": self.browse_filter.text(),
+            "browse_all": self.browse_search_all.text(),
+            "browse_column_value": self.browse_column_value.text(),
+        }
+        return {
+            "geometry": self._encode_qbytearray(self.saveGeometry()),
+            "window_state": self._encode_qbytearray(self.saveState()),
+            "tabs_index": self.tabs.currentIndex(),
+            "panels": {label: toggle.isChecked() for label, toggle in self.visibility_toggles.items()},
+            "splitters": {"connections": self.connections_splitter.sizes()},
+            "headers": headers,
+            "checkboxes": checkboxes,
+            "combos": combos,
+            "filters": filters,
+            "tables_view": self._tables_view_config(),
+            "compatible_rule_types_only": self.rule_compatibility_filter.isChecked(),
+            "rule_constant": self.rule_constant.text(),
+            "selected_rule_fields": [[item.text(0), item.text(1)] for item in self.rule_tree.selectedItems()],
+            "browse_columns": self.browse_column.checked_data(),
+        }
+
+    def _apply_interface_settings(self, settings: dict[str, Any], *, persist: bool = True) -> None:
+        self._restoring_interface_settings = True
+        try:
+            self._pending_lookup_selection = None
+            self._pending_interface_browse_table = None
+            self._pending_interface_browse_columns = []
+            for key, method in (("geometry", self.restoreGeometry), ("window_state", self.restoreState)):
+                encoded = settings.get(key)
+                if isinstance(encoded, str) and encoded:
+                    try: method(QByteArray(base64.b64decode(encoded.encode("ascii"))))
+                    except (ValueError, TypeError): pass
+            panels = settings.get("panels", {})
+            if isinstance(panels, dict):
+                for label, toggle in self.visibility_toggles.items():
+                    if label in panels:
+                        toggle.setChecked(bool(panels[label]))
+            splitters = settings.get("splitters", {})
+            if isinstance(splitters, dict) and isinstance(splitters.get("connections"), list):
+                self.connections_splitter.setSizes(splitters["connections"])
+            headers = settings.get("headers", {})
+            if isinstance(headers, dict):
+                for name, header in (("tables", self.table_view.header()),
+                                     ("rules", self.rule_tree.header()),
+                                     ("browse", self.browse_view.horizontalHeader())):
+                    encoded = headers.get(name)
+                    if isinstance(encoded, str) and encoded:
+                        try: header.restoreState(QByteArray(base64.b64decode(encoded.encode("ascii"))))
+                        except (ValueError, TypeError): pass
+            checkboxes = settings.get("checkboxes", {})
+            if isinstance(checkboxes, dict):
+                for box in self.findChildren(QCheckBox):
+                    if box.text() in checkboxes:
+                        box.setChecked(bool(checkboxes[box.text()]))
+            if isinstance(settings.get("tables_view"), dict):
+                self._load_tables_view_config(settings["tables_view"])
+            filters = settings.get("filters", {})
+            if isinstance(filters, dict):
+                for key, widget in (("table", self.table_filter), ("rules", self.rule_search),
+                                    ("lookup_table", self.lookup_table_filter),
+                                    ("lookup_column", self.lookup_column_filter),
+                                    ("browse_table", self.browse_filter),
+                                    ("browse_all", self.browse_search_all),
+                                    ("browse_column_value", self.browse_column_value)):
+                    if key in filters: widget.setText(str(filters[key]))
+            self.rule_compatibility_filter.setChecked(bool(settings.get("compatible_rule_types_only", False)))
+            self.rule_constant.setText(str(settings.get("rule_constant", "")))
+            selected_rule_fields = settings.get("selected_rule_fields", [])
+            self._pending_selected_rule_fields = [entry for entry in selected_rule_fields
+                                                  if isinstance(entry, list) and len(entry) == 2
+                                                  and all(isinstance(value, str) for value in entry)] if isinstance(selected_rule_fields, list) else []
+            self._pending_interface_browse_columns = [value for value in settings.get("browse_columns", [])
+                                                      if isinstance(value, str)] if isinstance(settings.get("browse_columns", []), list) else []
+            combos = settings.get("combos", {})
+            if isinstance(combos, dict):
+                for key, widget in (("rule_status", self.rule_status),
+                                    ("rule_compatibility_status", self.rule_compatibility_status_filter),
+                                    ("rule_mode", self.rule_mode), ("rule_type", self.rule_type),
+                                    ("lookup_table", self.lookup_table), ("lookup_column", self.lookup_column),
+                                    ("browse_role", self.browse_role), ("browse_table", self.browse_table)):
+                    value = combos.get(key)
+                    if key == "rule_compatibility_status":
+                        index = widget.findData(value)
+                        if index >= 0: widget.setCurrentIndex(index)
+                    elif isinstance(value, str):
+                        index = widget.findText(value)
+                        if index >= 0: widget.setCurrentIndex(index)
+                direction = combos.get("lookup_direction")
+                if direction is not None:
+                    index = self.lookup_direction.findData(direction)
+                    if index >= 0: self.lookup_direction.setCurrentIndex(index)
+                saved_lookup_table = combos.get("lookup_table", "")
+                saved_lookup_column = combos.get("lookup_column", "")
+                if saved_lookup_table and saved_lookup_column:
+                    self._pending_lookup_selection = (saved_lookup_table, saved_lookup_column)
+                    if self.mapping_fields:
+                        self._select_lookup_field(saved_lookup_table, saved_lookup_column)
+                saved_browse_role = combos.get("browse_role", "source")
+                saved_browse_table = combos.get("browse_table", "")
+                if saved_browse_table:
+                    self._pending_interface_browse_table = (saved_browse_role, saved_browse_table)
+                    if self.browse_tables.get(saved_browse_role):
+                        self.filter_browse_tables()
+            if isinstance(filters, dict):
+                self.lookup_table_filter.setText(str(filters.get("lookup_table", "")))
+                self.lookup_column_filter.setText(str(filters.get("lookup_column", "")))
+            self._update_rule_type_filter(preferred=combos.get("rule_type") if isinstance(combos, dict) else None)
+            self._restore_rule_tree_selection()
+            tab_index = settings.get("tabs_index")
+            if isinstance(tab_index, int) and 0 <= tab_index < self.tabs.count():
+                self.tabs.setCurrentIndex(tab_index)
+        finally:
+            self._restoring_interface_settings = False
+        if persist:
+            if self.tables:
+                self.render_tables()
+            self.save_state()
+
+    def _install_interface_state_tracking(self) -> None:
+        self._interface_tracking_ready = True
+        self._interface_state_timer = QTimer(self)
+        self._interface_state_timer.setSingleShot(True)
+        self._interface_state_timer.setInterval(400)
+        self._interface_state_timer.timeout.connect(self.save_state)
+        for widget in self.findChildren(QLineEdit): widget.textChanged.connect(self._schedule_interface_state_save)
+        for widget in self.findChildren(QPlainTextEdit): widget.textChanged.connect(self._schedule_interface_state_save)
+        for widget in self.findChildren(QCheckBox): widget.toggled.connect(self._schedule_interface_state_save)
+        for widget in self.findChildren(QComboBox): widget.currentIndexChanged.connect(self._schedule_interface_state_save)
+        for widget in self.findChildren(QToolButton): widget.toggled.connect(self._schedule_interface_state_save)
+        self.tabs.currentChanged.connect(self._schedule_interface_state_save)
+        for splitter in self.findChildren(QSplitter): splitter.splitterMoved.connect(self._schedule_interface_state_save)
+        for widget in (self.table_view, self.rule_tree, self.browse_view):
+            header = widget.header() if isinstance(widget, QTreeWidget) else widget.horizontalHeader()
+            header.sectionResized.connect(self._schedule_interface_state_save)
+            header.sectionMoved.connect(self._schedule_interface_state_save)
+            header.sortIndicatorChanged.connect(self._schedule_interface_state_save)
+        self.rule_tree.itemSelectionChanged.connect(self._schedule_interface_state_save)
+
+    def _schedule_interface_state_save(self, *_args) -> None:
+        timer = getattr(self, "_interface_state_timer", None)
+        if timer is not None and not getattr(self, "_restoring_interface_settings", False):
+            timer.start()
+
+    def save_interface_defaults(self) -> None:
+        path = self._interface_defaults_path()
+        try:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            try: path.parent.chmod(0o700)
+            except OSError: pass
+            save_json_atomic(str(path), self._interface_settings_snapshot())
+            path.chmod(0o600)
+            self.save_state()
+            self.log_message("Saved current interface settings as the default.")
+        except Exception as exc:
+            self.error("Could not save interface defaults", exc)
+
+    def restore_interface_defaults(self) -> None:
+        path = self._interface_defaults_path()
+        if not path.exists():
+            return self.info("No interface defaults", "Save current interface settings as the default first.")
+        try:
+            settings = load_json(str(path))
+            if not isinstance(settings, dict): raise ValueError("Interface defaults must be a JSON object")
+            self._apply_interface_settings(settings)
+            self.log_message("Restored the saved default interface settings.")
+        except Exception as exc:
+            self.error("Could not restore interface defaults", exc)
 
     def _auto_changed(self, value: bool) -> None:
         self.auto_confirm = value; self.save_state()
@@ -1727,6 +1953,28 @@ class AnonymizerWindow(QMainWindow):
             self._update_rule_compatibility_notice()
         except Exception: pass
 
+    def _restore_rule_tree_selection(self) -> None:
+        if not self._pending_selected_rule_fields:
+            return
+        pending = list(self._pending_selected_rule_fields)
+        found = []
+        self.rule_tree.blockSignals(True)
+        try:
+            for index in range(self.rule_tree.topLevelItemCount()):
+                item = self.rule_tree.topLevelItem(index)
+                if [item.text(0), item.text(1)] in pending:
+                    item.setSelected(True)
+                    found.append([item.text(0), item.text(1)])
+            if found:
+                for index in range(self.rule_tree.topLevelItemCount()):
+                    item = self.rule_tree.topLevelItem(index)
+                    if [item.text(0), item.text(1)] == found[0]:
+                        self.rule_tree.setCurrentItem(item)
+                        break
+        finally:
+            self.rule_tree.blockSignals(False)
+        self._pending_selected_rule_fields = [entry for entry in pending if entry not in found]
+
     def show_rule_context_menu(self, position) -> None:
         """Offer source table browsing from a rule row."""
         item = self.rule_tree.itemAt(position)
@@ -1954,13 +2202,28 @@ class AnonymizerWindow(QMainWindow):
         role = self.browse_role.currentText(); query = self.browse_filter.text().casefold()
         names = [t["name"] for t in self.browse_tables.get(role, []) if query in t["name"].casefold()]
         current = self.browse_table.currentText(); self.browse_table.blockSignals(True); self.browse_table.clear(); self.browse_table.addItems(names)
+        pending = self._pending_interface_browse_table
+        use_pending_table = bool(pending and pending[0] == role and pending[1] in names)
+        if use_pending_table:
+            current = pending[1]
         if current in names: self.browse_table.setCurrentText(current)
         self.browse_table.blockSignals(False)
         item = next((t for t in self.browse_tables.get(role, []) if t["name"] == self.browse_table.currentText()), None)
         self._set_browse_columns(item)
+        if use_pending_table:
+            self._pending_interface_browse_table = None
 
     def _set_browse_columns(self, item: dict[str, Any] | None) -> None:
         selected = self.browse_column.checked_data()
+        pending_table = self._pending_interface_browse_table
+        use_pending_columns = (
+            not selected and self._pending_interface_browse_columns and item is not None
+            and pending_table is not None
+            and pending_table[0] == self.browse_role.currentText()
+            and pending_table[1] == item.get("name")
+        )
+        if use_pending_columns:
+            selected = self._pending_interface_browse_columns
         self.browse_column.blockSignals(True)
         self.browse_column.model().clear()
         self.browse_column.add_checkable_item("All columns", None, not selected)
@@ -1969,6 +2232,8 @@ class AnonymizerWindow(QMainWindow):
                 name = column["COLUMN_NAME"]
                 self.browse_column.add_checkable_item(name, name, name in selected)
         self.browse_column.blockSignals(False)
+        if use_pending_columns:
+            self._pending_interface_browse_columns = []
 
     def _browse_table_changed(self, table: str) -> None:
         role = self.browse_role.currentText()
@@ -2004,6 +2269,14 @@ class AnonymizerWindow(QMainWindow):
                 text = "NULL" if value is None else str(value)
                 self.browse_view.setItem(r, c, QTableWidgetItem(text))
         self.browse_view.resizeColumnsToContents()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._schedule_interface_state_save()
+
+    def moveEvent(self, event) -> None:
+        super().moveEvent(event)
+        self._schedule_interface_state_save()
 
     def closeEvent(self, event) -> None:
         if self.pause_event is not None and self.copy_resume:
