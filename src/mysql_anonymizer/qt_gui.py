@@ -441,7 +441,13 @@ class AnonymizerWindow(QMainWindow):
         controls = QHBoxLayout()
         self.rule_search = QLineEdit(); self.rule_search.setPlaceholderText("Search tables or columns…"); self.rule_search.textChanged.connect(self.refresh_rules)
         self.rule_status = QComboBox(); self.rule_status.addItems(["All statuses", "Anonymized", "Preserved", "Unconfigured", "Needs attention"]); self.rule_status.currentTextChanged.connect(self.refresh_rules)
-        controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status); layout.addLayout(controls)
+        self.rule_compatibility_status_filter = QComboBox()
+        for label, value in (("All compatibility", "all"), ("Compatible", "compatible"),
+                             ("Incompatible", "incompatible"), ("Not checked", "not_checked")):
+            self.rule_compatibility_status_filter.addItem(label, value)
+        self.rule_compatibility_status_filter.currentIndexChanged.connect(self.refresh_rules)
+        controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status)
+        controls.addWidget(self.rule_compatibility_status_filter); layout.addLayout(controls)
         self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Source type", "Output type", "Compatibility", "Rule status"])
         self.rule_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
         self.rule_tree.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1664,6 +1670,7 @@ class AnonymizerWindow(QMainWindow):
             data = json.loads(self.rules_text.toPlainText() or "{}"); table_rules = data.get("tables", {})
             source = {t["name"]: {c["COLUMN_NAME"]: c for c in t["columns"]} for t in self.tables}
             query = self.rule_search.text().casefold(); status_filter = self.rule_status.currentText()
+            compatibility_filter = self.rule_compatibility_status_filter.currentData()
             self.rule_tree.clear()
             for table in sorted(set(source) | set(table_rules)):
                 rule = table_rules.get(table, {}); preserve = set(rule.get("preserve", [])); anonymize = rule.get("anonymize", {})
@@ -1683,6 +1690,9 @@ class AnonymizerWindow(QMainWindow):
                     compatible, reason = self._rule_compatibility(data_type, col, configured_rule)
                     compatibility = "—" if not configured_rule or source_column is None else ("Compatible" if compatible else "Incompatible")
                     if query and query not in f"{table} {col} {source_type} {output_type} {compatibility} {status}".casefold(): continue
+                    if compatibility_filter == "compatible" and compatibility != "Compatible": continue
+                    if compatibility_filter == "incompatible" and compatibility != "Incompatible": continue
+                    if compatibility_filter == "not_checked" and compatibility != "—": continue
                     if status_filter == "Anonymized" and not status.startswith("Anonymized"): continue
                     if status_filter == "Preserved" and status != status_filter: continue
                     if status_filter == "Unconfigured" and status != status_filter: continue
