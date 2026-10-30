@@ -8,7 +8,7 @@ from .transformations import TEXT_DATA_TYPES
 
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
 _NUMERIC_DATA_TYPES = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
-_TEXT_TRANSFORMS = {"email", "phone", "name", "address", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
+_TEXT_TRANSFORMS = {"email", "phone", "name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
 _SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "constant"}
 _TRANSFORM_MAX_LENGTH = {
     # Keep generated emails within common VARCHAR(32) columns.

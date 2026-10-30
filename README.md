@@ -139,6 +139,7 @@ Add a transformation to a column under that table's `anonymize` object. These ex
 | `phone` | `{"type": "phone"}` | `+15551234567` |
 | `name` | `{"type": "name"}` | `Person01234567` |
 | `address` | `{"type": "address"}` | `1234 Example Street` |
+| `file_name` | `{"type": "file_name"}` | `reports/quarterly.pdf` becomes `file123456789.pdf` (directory components are removed; the extension is retained). |
 | `ip_address` | `{"type": "ip_address"}` | IPv4 becomes an address in `10.0.0.0/8`; IPv6 becomes an address in `2001:db8::/32`. Invalid input stops the copy with a column-specific error. |
 | `date_shift` | `{"type": "date_shift"}` | Shifts a date or timestamp by a stable number of days, from 3,650 days earlier to 3,650 days later. Requires a date/time value. |
 | `constant` | `{"type": "constant", "value": "redacted"}` | `redacted` |
