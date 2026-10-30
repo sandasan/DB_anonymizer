@@ -462,7 +462,12 @@ class AnonymizerWindow(QMainWindow):
         actions.addWidget(self.save_rules_btn)
         actions.addStretch(1); layout.addLayout(actions)
         controls = QHBoxLayout()
-        self.rule_search = QLineEdit(); self.rule_search.setPlaceholderText("Search tables or columns…"); self.rule_search.textChanged.connect(self.refresh_rules)
+        self.rule_search = QLineEdit(); self.rule_search.setPlaceholderText("Search tables or columns…")
+        # Rebuilding a large rules tree for every keystroke can block the GUI.
+        self._rule_search_timer = QTimer(self); self._rule_search_timer.setSingleShot(True)
+        self._rule_search_timer.setInterval(180)
+        self._rule_search_timer.timeout.connect(self.refresh_rules)
+        self.rule_search.textChanged.connect(lambda: self._rule_search_timer.start())
         self.rule_status = QComboBox(); self.rule_status.addItems(["All statuses", "Anonymized", "Preserved", "Unconfigured", "Needs attention"]); self.rule_status.currentTextChanged.connect(self.refresh_rules)
         self.rule_compatibility_status_filter = QComboBox()
         for label, value in (("All compatibility", "all"), ("Compatible", "compatible"),
@@ -1894,6 +1899,12 @@ class AnonymizerWindow(QMainWindow):
 
     def refresh_rules(self) -> None:
         if not hasattr(self, "rule_tree"): return
+        tree = self.rule_tree
+        was_sorting = tree.isSortingEnabled()
+        sort_column = tree.sortColumn()
+        sort_order = tree.header().sortIndicatorOrder()
+        tree.setUpdatesEnabled(False)
+        tree.setSortingEnabled(False)
         try:
             data = json.loads(self.rules_text.toPlainText() or "{}"); table_rules = data.get("tables", {})
             source = {t["name"]: {c["COLUMN_NAME"]: c for c in t["columns"]} for t in self.tables}
@@ -1930,6 +1941,11 @@ class AnonymizerWindow(QMainWindow):
             self._update_rule_compatibility_notice()
         except (json.JSONDecodeError, AttributeError, TypeError) as exc:
             if hasattr(self, "rule_tree"): self.rule_tree.clear()
+        finally:
+            tree.setSortingEnabled(was_sorting)
+            if was_sorting and sort_column >= 0:
+                tree.sortItems(sort_column, sort_order)
+            tree.setUpdatesEnabled(True)
 
     def load_rule_selection(self) -> None:
         selected = self.rule_tree.selectedItems()
