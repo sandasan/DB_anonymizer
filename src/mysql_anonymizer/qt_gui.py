@@ -451,10 +451,14 @@ class AnonymizerWindow(QMainWindow):
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
         self.rule_type = QComboBox(); self.rule_type.addItems(["email", "url", "phone", "payment_key", "password", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "date_shift", "constant", "unique", "passport", "pnr_code", "location_generalization", "numeric_variance", "coordinate_round", "date_round"])
+        self._all_rule_types = [self.rule_type.itemText(i) for i in range(self.rule_type.count())]
+        self._rule_type_before_filter = ""
+        self.rule_compatibility_filter = QCheckBox("Compatible types only")
+        self.rule_compatibility_filter.setToolTip("Limit transformation choices to types compatible with every selected field. For constant, enter a JSON value first so its type can be checked; turn this off to configure an untyped value.")
         self.rule_constant = QLineEdit(); self.rule_constant.setPlaceholderText("JSON value for constant")
         self.rule_type.currentTextChanged.connect(self.update_rule_options_placeholder)
-        editrow = QHBoxLayout(); editrow.addWidget(QLabel("Mode")); editrow.addWidget(self.rule_mode); editrow.addWidget(QLabel("Transform")); editrow.addWidget(self.rule_type); editrow.addWidget(self.rule_constant, 1)
-        apply_btn = QPushButton("Apply to selected fields"); apply_btn.clicked.connect(self.apply_rule); editrow.addWidget(apply_btn)
+        editrow = QHBoxLayout(); editrow.addWidget(QLabel("Mode")); editrow.addWidget(self.rule_mode); editrow.addWidget(QLabel("Transform")); editrow.addWidget(self.rule_type); editrow.addWidget(self.rule_compatibility_filter); editrow.addWidget(self.rule_constant, 1)
+        self.apply_rule_btn = QPushButton("Apply to selected fields"); self.apply_rule_btn.clicked.connect(self.apply_rule); editrow.addWidget(self.apply_rule_btn)
         remove_btn = QPushButton("Remove rule"); remove_btn.clicked.connect(self.remove_rule); editrow.addWidget(remove_btn); layout.addLayout(editrow)
         self.rule_compatibility_notice = QLabel()
         self.rule_compatibility_notice.setObjectName("ruleCompatibilityNotice")
@@ -467,8 +471,12 @@ class AnonymizerWindow(QMainWindow):
         self.rules_text.textChanged.connect(lambda: self._rules_refresh_timer.start())
         self.rules_text.textChanged.connect(self._update_save_rules_button)
         self.rule_type.currentTextChanged.connect(self._update_rule_compatibility_notice)
+        self.rule_type.currentTextChanged.connect(self._rule_type_selection_changed)
         self.rule_constant.textChanged.connect(self._update_rule_compatibility_notice)
+        self.rule_constant.textChanged.connect(self._update_rule_type_filter)
         self.rule_mode.currentTextChanged.connect(self._update_rule_compatibility_notice)
+        self.rule_mode.currentTextChanged.connect(self._update_rule_type_filter)
+        self.rule_compatibility_filter.toggled.connect(self._update_rule_type_filter)
         layout.addWidget(self.rules_text, 2)
         self.rule_tree.itemSelectionChanged.connect(self.load_rule_selection)
         self._saved_rules_snapshot = self._rules_snapshot(self.rules_text.toPlainText())
@@ -1483,7 +1491,7 @@ class AnonymizerWindow(QMainWindow):
         return "Other"
 
     @staticmethod
-    def _rule_output_type(rule: dict[str, Any] | None) -> str:
+    def _rule_output_type(rule: dict[str, Any] | None, source_data_type: str = "") -> str:
         if not isinstance(rule, dict):
             return "Unchanged"
         kind = rule.get("type")
@@ -1497,7 +1505,15 @@ class AnonymizerWindow(QMainWindow):
             value = rule.get("value")
             if isinstance(value, bool): return "Boolean"
             if isinstance(value, (int, float)): return "Numeric"
-            if isinstance(value, str): return "Text/string"
+            if isinstance(value, str):
+                if source_data_type.lower() in AnonymizerWindow._rule_date_types:
+                    try:
+                        datetime.fromisoformat(value.replace("Z", "+00:00"))
+                        return "Date/time"
+                    except ValueError:
+                        pass
+                if source_data_type.lower() == "json": return "JSON"
+                return "Text/string"
             if value is None: return "NULL"
             return "JSON"
         return "Unknown"
@@ -1518,19 +1534,28 @@ class AnonymizerWindow(QMainWindow):
         elif kind in {"date_shift", "date_round"}:
             compatible = category == "Date/time"
         elif kind == "constant":
+            if "value" not in rule:
+                return False, "Enter a JSON value to check constant compatibility"
             value = rule.get("value")
             value_category = ("Boolean" if isinstance(value, bool) else
                               "Numeric" if isinstance(value, (int, float)) else
                               "Text" if isinstance(value, str) else
                               "JSON" if isinstance(value, (dict, list)) else "NULL")
+            if isinstance(value, str) and category == "Date/time":
+                try:
+                    datetime.fromisoformat(value.replace("Z", "+00:00"))
+                    value_category = "Date/time"
+                except ValueError:
+                    pass
             compatible = (value is None or value_category == category
+                          or (category == "Date/time" and value_category == "Date/time")
                           or (category in {"Text", "Enum/set"} and value_category == "Text")
                           or (category == "JSON" and value_category in {"Boolean", "Numeric", "Text", "JSON", "NULL"}))
         else:
             compatible = False
         if compatible:
             return True, ""
-        return False, f"{cls._rule_output_type(rule)} output is not compatible with {data_type or 'unknown source type'}"
+        return False, f"{cls._rule_output_type(rule, data_type)} output is not compatible with {data_type or 'unknown source type'}"
 
     def _source_column(self, table: str, column: str) -> dict[str, Any] | None:
         for source_table in self.tables:
@@ -1547,6 +1572,12 @@ class AnonymizerWindow(QMainWindow):
             self.rule_compatibility_notice.hide()
             return
         kind = self.rule_type.currentText()
+        if not kind:
+            self.rule_compatibility_notice.setText(
+                "The saved transformation is incompatible with the selected field. Choose a compatible type or turn off the filter."
+            )
+            self.rule_compatibility_notice.show()
+            return
         rule: dict[str, Any] = {"type": kind}
         if kind == "constant":
             raw = self.rule_constant.text()
@@ -1575,6 +1606,58 @@ class AnonymizerWindow(QMainWindow):
         else:
             self.rule_compatibility_notice.hide()
 
+    def _rule_type_selection_changed(self, *_args) -> None:
+        if self.rule_type.currentText():
+            self._rule_type_before_filter = ""
+
+    def _update_rule_type_filter(self, *_args, preferred: str | None = None) -> None:
+        if not hasattr(self, "rule_type"):
+            return
+        current = preferred or self.rule_type.currentText() or self._rule_type_before_filter
+        filtered = self.rule_compatibility_filter.isChecked()
+        selected = self.rule_tree.selectedItems()
+        options = list(self._all_rule_types)
+        if filtered and selected:
+            options = []
+            for kind in self._all_rule_types:
+                candidate: dict[str, Any] = {"type": kind}
+                if kind == "constant":
+                    raw = self.rule_constant.text()
+                    if raw.strip():
+                        try:
+                            candidate["value"] = json.loads(raw)
+                        except json.JSONDecodeError:
+                            candidate["value"] = raw
+                compatible = True
+                for item in selected:
+                    source = self._source_column(item.text(0), item.text(1))
+                    if source is not None and not self._rule_compatibility(
+                            source.get("DATA_TYPE", ""), item.text(1), candidate)[0]:
+                        compatible = False
+                        break
+                if compatible:
+                    options.append(kind)
+        if current and current not in options and filtered:
+            self._rule_type_before_filter = current
+        elif not filtered:
+            self._rule_type_before_filter = ""
+        blocked = self.rule_type.blockSignals(True)
+        try:
+            self.rule_type.clear()
+            self.rule_type.addItems(options)
+            if current in options:
+                self.rule_type.setCurrentText(current)
+            elif current and filtered:
+                self.rule_type.setCurrentIndex(-1)
+        finally:
+            self.rule_type.blockSignals(blocked)
+        self.update_rule_options_placeholder(self.rule_type.currentText())
+        self.apply_rule_btn.setEnabled(
+            not (filtered and self.rule_mode.currentText() == "Anonymize"
+                 and selected and not self.rule_type.currentText())
+        )
+        self._update_rule_compatibility_notice()
+
     def refresh_rules(self) -> None:
         if not hasattr(self, "rule_tree"): return
         try:
@@ -1596,7 +1679,7 @@ class AnonymizerWindow(QMainWindow):
                     configured_rule = anonymize.get(col) if isinstance(anonymize, dict) else None
                     data_type = source_column.get("DATA_TYPE", "") if source_column else ""
                     source_type = source_column.get("COLUMN_TYPE", data_type) if source_column else "—"
-                    output_type = self._rule_output_type(configured_rule)
+                    output_type = self._rule_output_type(configured_rule, data_type)
                     compatible, reason = self._rule_compatibility(data_type, col, configured_rule)
                     compatibility = "—" if not configured_rule or source_column is None else ("Compatible" if compatible else "Incompatible")
                     if query and query not in f"{table} {col} {source_type} {output_type} {compatibility} {status}".casefold(): continue
@@ -1613,19 +1696,22 @@ class AnonymizerWindow(QMainWindow):
     def load_rule_selection(self) -> None:
         selected = self.rule_tree.selectedItems()
         if not selected:
+            self._update_rule_type_filter()
             self._update_rule_compatibility_notice()
             return
         table, col = selected[0].text(0), selected[0].text(1)
         try:
             text = self.rules_text.toPlainText()
             rules = json.loads(text or "{}"); spec = rules.get("tables", {}).get(table, {})
+            selected_type = ""
             if col in spec.get("anonymize", {}):
-                transform = spec["anonymize"][col]; self.rule_mode.setCurrentText("Anonymize"); self.rule_type.setCurrentText(transform.get("type", "email"))
+                transform = spec["anonymize"][col]; selected_type = transform.get("type", "email"); self.rule_mode.setCurrentText("Anonymize")
                 options = {key: value for key, value in transform.items() if key != "type"}
                 self.rule_constant.setText(json.dumps(options.get("value"), ensure_ascii=False) if transform.get("type") == "constant" and "value" in options else (json.dumps(options, ensure_ascii=False) if options else ""))
             elif col in spec.get("preserve", []): self.rule_mode.setCurrentText("Preserve")
             else: self.rule_mode.setCurrentText("Unconfigured")
             self._select_rule_json_entry(text, table, col)
+            self._update_rule_type_filter(preferred=selected_type or self.rule_type.currentText())
             self._update_rule_compatibility_notice()
         except Exception: pass
 
@@ -1740,6 +1826,8 @@ class AnonymizerWindow(QMainWindow):
             mode = self.rule_mode.currentText()
             transform = None
             if mode == "Anonymize":
+                if not self.rule_type.currentText():
+                    return self.info("Select a compatible transformation", "Choose an anonymization type compatible with every selected field, or turn off the compatibility filter.")
                 transform = {"type": self.rule_type.currentText()}
                 if transform["type"] == "constant":
                     raw = self.rule_constant.text()
