@@ -25,6 +25,11 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         return f"user{stable_number(table, column, value, 10**12)}@example.invalid"
     if kind == "phone":
         return f"+1555{stable_number(table, column, value, 10**7):07d}"
+    if kind == "payment_key":
+        digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).hexdigest()
+        return f"test_{digest[:32]}"
+    if kind == "description":
+        return "redacted"
     if kind == "file_name":
         # Drop any directory components and retain only the final extension.
         # Handle both path separators because values may come from Windows or Unix.

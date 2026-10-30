@@ -137,6 +137,8 @@ Add a transformation to a column under that table's `anonymize` object. These ex
 | --- | --- | --- |
 | `email` | `{"type": "email"}` | `user123456789@example.invalid` |
 | `phone` | `{"type": "phone"}` | `+15551234567` |
+| `payment_key` | `{"type": "payment_key"}` | A synthetic `test_…` key; suitable for LiqPay or other payment credentials. This explicit type is allowed for columns named `key`, `token`, or `secret`. |
+| `description` | `{"type": "description"}` | `redacted` (replaces comments, transaction descriptions, and other free text with a fixed placeholder). |
 | `name` | `{"type": "name"}` | `Person01234567` |
 | `entity_name` | `{"type": "entity_name"}` | A generic deterministic label such as `Entity01234567`, suitable for hotel, company, or other non-person names. |
 | `address` | `{"type": "address"}` | `1234 Example Street` |

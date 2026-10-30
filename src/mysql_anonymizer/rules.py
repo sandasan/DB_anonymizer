@@ -8,12 +8,14 @@ from .transformations import TEXT_DATA_TYPES
 
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
 _NUMERIC_DATA_TYPES = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
-_TEXT_TRANSFORMS = {"email", "phone", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
+_TEXT_TRANSFORMS = {"email", "phone", "payment_key", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
 _SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "constant"}
 _TRANSFORM_MAX_LENGTH = {
     # Keep generated emails within common VARCHAR(32) columns.
     "email": len("user") + 12 + len("@example.invalid"),
     "phone": len("+1555") + 7,
+    "payment_key": len("test_") + 32,
+    "description": len("redacted"),
     "name": len("Person") + 8,
     "entity_name": len("Entity") + 8,
     "address": len("9999 Example Street"),
@@ -143,7 +145,13 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"Identifier column {tn}.{col} must be preserved to keep database relationships intact; remove it from anonymize")
             if col in preserved:
                 raise ValueError(f"{tn}.{col} is in both preserve and anonymize; remove it from anonymize")
-            if re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|token|secret|salt", col, re.I):
+            auth_field = re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|token|secret|salt", col, re.I)
+            payment_credential_field = (
+                rule.get("type") == "payment_key"
+                and re.search(r"key|token|secret", col, re.I)
+                and not re.search(r"password|passwd|pwd|pass.?hash|login|username|user_name|salt", col, re.I)
+            )
+            if auth_field and not payment_credential_field:
                 raise ValueError(f"Authentication column {tn}.{col} must be preserved so copied users can log in")
             if rule.get("type") in _TEXT_TRANSFORMS and cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                 raise ValueError(
