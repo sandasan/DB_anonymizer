@@ -478,6 +478,7 @@ class AnonymizerWindow(QMainWindow):
         self.rules_text.textChanged.connect(self._update_save_rules_button)
         self.rule_type.currentTextChanged.connect(self._update_rule_compatibility_notice)
         self.rule_type.currentTextChanged.connect(self._rule_type_selection_changed)
+        self.rule_type.currentTextChanged.connect(self._update_rule_type_filter)
         self.rule_constant.textChanged.connect(self._update_rule_compatibility_notice)
         self.rule_constant.textChanged.connect(self._update_rule_type_filter)
         self.rule_mode.currentTextChanged.connect(self._update_rule_compatibility_notice)
