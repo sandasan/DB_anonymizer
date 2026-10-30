@@ -339,6 +339,7 @@ class AnonymizerWindow(QMainWindow):
             QGroupBox::title { subcontrol-origin: margin; left: 9px; padding: 0 4px; }
             QHeaderView::section { background: #e9eef5; padding: 6px; border: 0; font-weight: 600; }
             QPushButton#primaryButton { color: white; background: #2563eb; padding: 7px 14px; font-weight: 600; }
+            QPushButton#saveRulesButton[unsaved="true"] { color: white; background: #c2410c; border: 1px solid #9a3412; font-weight: 600; }
         """)
 
     @staticmethod
@@ -430,8 +431,12 @@ class AnonymizerWindow(QMainWindow):
     def _build_rules(self) -> None:
         layout = self._scroll_page(self.rules_tab)
         actions = QHBoxLayout()
-        for title, callback in (("Load rules", self.load_rules), ("Generate rules from schema", self.generate_rules), ("Save rules", self.save_rules)):
+        for title, callback in (("Load rules", self.load_rules), ("Generate rules from schema", self.generate_rules)):
             button = QPushButton(title); button.clicked.connect(callback); actions.addWidget(button)
+        self.save_rules_btn = QPushButton("Save rules")
+        self.save_rules_btn.setObjectName("saveRulesButton")
+        self.save_rules_btn.clicked.connect(self.save_rules)
+        actions.addWidget(self.save_rules_btn)
         actions.addStretch(1); layout.addLayout(actions)
         controls = QHBoxLayout()
         self.rule_search = QLineEdit(); self.rule_search.setPlaceholderText("Search tables or columns…"); self.rule_search.textChanged.connect(self.refresh_rules)
@@ -453,8 +458,28 @@ class AnonymizerWindow(QMainWindow):
         self.rules_text = QPlainTextEdit(); self.rules_text.setMinimumHeight(280)
         self._rules_refresh_timer = QTimer(self); self._rules_refresh_timer.setSingleShot(True); self._rules_refresh_timer.setInterval(250); self._rules_refresh_timer.timeout.connect(self.refresh_rules)
         self.rules_text.textChanged.connect(lambda: self._rules_refresh_timer.start())
+        self.rules_text.textChanged.connect(self._update_save_rules_button)
         layout.addWidget(self.rules_text, 2)
         self.rule_tree.itemSelectionChanged.connect(self.load_rule_selection)
+        self._saved_rules_snapshot = self._rules_snapshot(self.rules_text.toPlainText())
+        self._update_save_rules_button()
+
+    @staticmethod
+    def _rules_snapshot(text: str) -> str:
+        """Compare rule content while ignoring JSON formatting differences."""
+        try:
+            return json.dumps(json.loads(text or "{}"), sort_keys=True, ensure_ascii=False)
+        except (json.JSONDecodeError, TypeError):
+            return text
+
+    def _update_save_rules_button(self) -> None:
+        if not hasattr(self, "save_rules_btn") or not hasattr(self, "rules_text"):
+            return
+        unsaved = self._rules_snapshot(self.rules_text.toPlainText()) != self._saved_rules_snapshot
+        self.save_rules_btn.setProperty("unsaved", unsaved)
+        self.save_rules_btn.setToolTip("Rules have unsaved changes" if unsaved else "Rules are saved")
+        self.save_rules_btn.style().unpolish(self.save_rules_btn)
+        self.save_rules_btn.style().polish(self.save_rules_btn)
 
     def _build_lookup(self) -> None:
         layout = self._scroll_page(self.lookup_tab)
@@ -625,7 +650,7 @@ class AnonymizerWindow(QMainWindow):
     def load_rules(self) -> None:
         if not Path(self.rules_edit.text()).exists(): return
         try:
-            self.rules_text.blockSignals(True); self.rules_text.setPlainText(json.dumps(load_json(self.rules_edit.text()), indent=2, ensure_ascii=False)); self.rules_text.blockSignals(False); self.refresh_rules(); self.log_message(f"Loaded rules from {self.rules_edit.text()}.")
+            self.rules_text.blockSignals(True); self.rules_text.setPlainText(json.dumps(load_json(self.rules_edit.text()), indent=2, ensure_ascii=False)); self.rules_text.blockSignals(False); self._saved_rules_snapshot = self._rules_snapshot(self.rules_text.toPlainText()); self._update_save_rules_button(); self.refresh_rules(); self.log_message(f"Loaded rules from {self.rules_edit.text()}.")
         except Exception as exc: self.rules_text.blockSignals(False); self.error("Could not load rules", exc)
 
     def save_rules(self) -> bool:
@@ -633,6 +658,8 @@ class AnonymizerWindow(QMainWindow):
             rules = json.loads(self.rules_text.toPlainText() or "{}")
             if not isinstance(rules, dict): raise ValueError("Rules must be a JSON object")
             save_json_atomic(self.rules_edit.text(), rules)
+            self._saved_rules_snapshot = self._rules_snapshot(self.rules_text.toPlainText())
+            self._update_save_rules_button()
             self.save_state()
             self._sync_active_profile_rules(rules)
             self.refresh_rules()
