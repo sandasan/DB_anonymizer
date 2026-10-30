@@ -477,6 +477,7 @@ class AnonymizerWindow(QMainWindow):
             return
         unsaved = self._rules_snapshot(self.rules_text.toPlainText()) != self._saved_rules_snapshot
         self.save_rules_btn.setProperty("unsaved", unsaved)
+        self.save_rules_btn.setText("Save rules • Unsaved" if unsaved else "Save rules")
         self.save_rules_btn.setToolTip("Rules have unsaved changes" if unsaved else "Rules are saved")
         self.save_rules_btn.style().unpolish(self.save_rules_btn)
         self.save_rules_btn.style().polish(self.save_rules_btn)
@@ -1616,7 +1617,7 @@ class AnonymizerWindow(QMainWindow):
                 spec["anonymize"].pop(col, None)
                 if mode == "Preserve": spec["preserve"].append(col)
                 elif mode == "Anonymize": spec["anonymize"][col] = copy.deepcopy(transform)
-            self.rules_text.blockSignals(True); self.rules_text.setPlainText(json.dumps(rules, indent=2, ensure_ascii=False)); self.rules_text.blockSignals(False); self.refresh_rules()
+            self.rules_text.blockSignals(True); self.rules_text.setPlainText(json.dumps(rules, indent=2, ensure_ascii=False)); self.rules_text.blockSignals(False); self._update_save_rules_button(); self.refresh_rules()
         except Exception as exc: self.error("Could not update rule", exc)
 
     def remove_rule(self) -> None:
