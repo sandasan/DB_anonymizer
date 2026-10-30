@@ -207,9 +207,9 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
         cursor = conn.cursor()
         try:
             conditions, params = [], []
-            selected_column = args["filter_column"]
-            if selected_column and selected_column not in columns:
-                raise ValueError("Selected filter column is not in the table")
+            selected_columns = args.get("filter_columns", [])
+            if any(column not in columns for column in selected_columns):
+                raise ValueError("A selected filter column is not in the table")
             if args["search"]:
                 conditions.append(
                     "(" + " OR ".join(
@@ -218,13 +218,16 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                     ) + ")"
                 )
                 params.extend([f"%{args['search']}%"] * len(columns))
-            if selected_column and args["filter_value"]:
+            if selected_columns and args["filter_value"]:
                 conditions.append(
-                    f"CAST(`{selected_column.replace('`', '``')}` AS CHAR) LIKE %s"
+                    "(" + " OR ".join(
+                        f"CAST(`{column.replace('`', '``')}` AS CHAR) LIKE %s"
+                        for column in selected_columns
+                    ) + ")"
                 )
-                params.append(f"%{args['filter_value']}%")
+                params.extend([f"%{args['filter_value']}%"] * len(selected_columns))
             where = " WHERE " + " AND ".join(conditions) if conditions else ""
-            result_columns = [selected_column] if selected_column else columns
+            result_columns = columns
             selected_sql = ", ".join(f"`{column.replace('`', '``')}`" for column in result_columns)
             cursor.execute(
                 f"SELECT {selected_sql} FROM `{table.replace('`', '``')}`{where} LIMIT 201",

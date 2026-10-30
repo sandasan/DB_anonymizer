@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton,
     QVBoxLayout, QWidget,
 )
+from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from .cli import check_config
 from .core import (
@@ -80,6 +81,62 @@ class BrowseDataTable(QTableWidget):
                 event.accept()
                 return
         super().wheelEvent(event)
+
+
+class CheckableComboBox(QComboBox):
+    """Combo box whose entries can be selected independently."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setModel(QStandardItemModel(self))
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setPlaceholderText("All columns")
+        self.view().pressed.connect(self._toggle_item)
+
+    def add_checkable_item(self, text: str, data: Any = None, checked: bool = False) -> None:
+        item = QStandardItem(text)
+        item.setData(data, Qt.ItemDataRole.UserRole)
+        item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+        item.setData(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
+                     Qt.ItemDataRole.CheckStateRole)
+        self.model().appendRow(item)
+        self._update_text()
+
+    def _toggle_item(self, index) -> None:
+        item = self.model().itemFromIndex(index)
+        if item is None:
+            return
+        item.setCheckState(Qt.CheckState.Unchecked if item.checkState() == Qt.CheckState.Checked
+                           else Qt.CheckState.Checked)
+        if item.data(Qt.ItemDataRole.UserRole) is None and item.checkState() == Qt.CheckState.Checked:
+            for row in range(1, self.count()):
+                self.model().item(row).setCheckState(Qt.CheckState.Unchecked)
+        elif item.data(Qt.ItemDataRole.UserRole) is not None and item.checkState() == Qt.CheckState.Checked:
+            self.model().item(0).setCheckState(Qt.CheckState.Unchecked)
+        elif not any(self.model().item(row).checkState() == Qt.CheckState.Checked
+                     for row in range(1, self.count())):
+            self.model().item(0).setCheckState(Qt.CheckState.Checked)
+        self._update_text()
+
+    def _update_text(self) -> None:
+        selected = [self.model().item(i).text() for i in range(self.count())
+                    if self.model().item(i).checkState() == Qt.CheckState.Checked]
+        self.lineEdit().setText(", ".join(selected) if selected else "All columns")
+
+    def checked_data(self) -> list[str]:
+        return [self.itemData(i) for i in range(self.count())
+                if self.model().item(i).checkState() == Qt.CheckState.Checked
+                and self.itemData(i) is not None]
+
+    def set_checked_data(self, values: list[str]) -> None:
+        wanted = set(values)
+        for i in range(self.count()):
+            item = self.model().item(i)
+            data = self.itemData(i)
+            checked = (not wanted) if data is None else data in wanted
+            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+        self._update_text()
 
 
 class AnonymizerWindow(QMainWindow):
@@ -428,7 +485,8 @@ class AnonymizerWindow(QMainWindow):
         self.browse_table = QComboBox(); self.browse_table.currentTextChanged.connect(self._browse_table_changed)
         self.browse_filter = QLineEdit(); self.browse_filter.setPlaceholderText("Filter tables"); self.browse_filter.textChanged.connect(self.filter_browse_tables)
         self.browse_search_all = QLineEdit(); self.browse_search_all.setPlaceholderText("Search all columns")
-        self.browse_column = QComboBox(); self.browse_column.addItem("All columns", None)
+        self.browse_column = CheckableComboBox()
+        self.browse_column.add_checkable_item("All columns", None, checked=True)
         self.browse_column_value = QLineEdit(); self.browse_column_value.setPlaceholderText("Column contains…")
         load = QPushButton("Load tables"); load.clicked.connect(self.load_browse_tables)
         search = QPushButton("Search / refresh"); search.clicked.connect(self.search_browse)
@@ -1633,16 +1691,14 @@ class AnonymizerWindow(QMainWindow):
         self._set_browse_columns(item)
 
     def _set_browse_columns(self, item: dict[str, Any] | None) -> None:
-        selected = self.browse_column.currentData()
+        selected = self.browse_column.checked_data()
         self.browse_column.blockSignals(True)
-        self.browse_column.clear()
-        self.browse_column.addItem("All columns", None)
+        self.browse_column.model().clear()
+        self.browse_column.add_checkable_item("All columns", None, not selected)
         if item:
             for column in item["columns"]:
                 name = column["COLUMN_NAME"]
-                self.browse_column.addItem(name, name)
-        index = self.browse_column.findData(selected)
-        self.browse_column.setCurrentIndex(index if index >= 0 else 0)
+                self.browse_column.add_checkable_item(name, name, name in selected)
         self.browse_column.blockSignals(False)
 
     def _browse_table_changed(self, table: str) -> None:
@@ -1652,7 +1708,7 @@ class AnonymizerWindow(QMainWindow):
         self.search_browse()
 
     def reset_browse_column_filter(self) -> None:
-        self.browse_column.setCurrentIndex(0)
+        self.browse_column.set_checked_data([])
         self.browse_column_value.clear()
         self.search_browse()
 
@@ -1667,7 +1723,7 @@ class AnonymizerWindow(QMainWindow):
             "browse_rows",
             {"role": role, "settings": config[role], "table": table,
              "columns": columns, "search": self.browse_search_all.text(),
-             "filter_column": self.browse_column.currentData(),
+             "filter_columns": self.browse_column.checked_data(),
              "filter_value": self.browse_column_value.text()},
             f"Reading {role}.{table}…",
         )
