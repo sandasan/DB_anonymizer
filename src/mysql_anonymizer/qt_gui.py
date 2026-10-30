@@ -450,6 +450,7 @@ class AnonymizerWindow(QMainWindow):
         controls.addWidget(self.rule_compatibility_status_filter); layout.addLayout(controls)
         self.rule_tree = QTreeWidget(); self.rule_tree.setHeaderLabels(["Table", "Column", "Source type", "Output type", "Compatibility", "Rule status"])
         self.rule_tree.setSelectionMode(QTreeWidget.ExtendedSelection)
+        self.rule_tree.setSortingEnabled(True)
         self.rule_tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.rule_tree.customContextMenuRequested.connect(self.show_rule_context_menu)
         for index in (0, 1, 2, 3, 4): self.rule_tree.header().setSectionResizeMode(index, QHeaderView.ResizeToContents)
