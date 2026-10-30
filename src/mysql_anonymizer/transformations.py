@@ -28,6 +28,17 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     if kind == "payment_key":
         digest = hashlib.sha256(f"{table}\0{column}\0{value}".encode()).hexdigest()
         return f"test_{digest[:32]}"
+    if kind == "card_mask":
+        last_four = stable_number(table, column, value, 10_000)
+        return f"**** **** **** {last_four:04d}"
+    if kind == "card_number":
+        body = f"0{stable_number(table, column, value, 10**14):014d}"
+        checksum_sum = 0
+        for index, digit in enumerate(reversed(body)):
+            number = int(digit) * (2 if index % 2 == 0 else 1)
+            checksum_sum += number - 9 if number > 9 else number
+        check_digit = (-checksum_sum) % 10
+        return f"{body}{check_digit}"
     if kind == "description":
         return "redacted"
     if kind == "file_name":

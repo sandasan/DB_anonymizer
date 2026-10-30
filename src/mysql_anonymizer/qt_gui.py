@@ -389,7 +389,7 @@ class AnonymizerWindow(QMainWindow):
         self.rule_tree.header().setSectionResizeMode(0, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents); self.rule_tree.header().setSectionResizeMode(2, QHeaderView.Stretch)
         self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
-        self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "payment_key", "description", "name", "entity_name", "address", "file_name", "ip_address", "date_shift", "constant", "unique", "passport", "pnr_code", "location_generalization", "numeric_variance", "date_round"])
+        self.rule_type = QComboBox(); self.rule_type.addItems(["email", "phone", "payment_key", "card_mask", "card_number", "description", "name", "entity_name", "address", "file_name", "ip_address", "date_shift", "constant", "unique", "passport", "pnr_code", "location_generalization", "numeric_variance", "date_round"])
         self.rule_constant = QLineEdit(); self.rule_constant.setPlaceholderText("JSON value for constant")
         self.rule_type.currentTextChanged.connect(self.update_rule_options_placeholder)
         editrow = QHBoxLayout(); editrow.addWidget(QLabel("Mode")); editrow.addWidget(self.rule_mode); editrow.addWidget(QLabel("Transform")); editrow.addWidget(self.rule_type); editrow.addWidget(self.rule_constant, 1)
