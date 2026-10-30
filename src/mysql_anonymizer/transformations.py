@@ -68,6 +68,8 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
     n = stable_number(table, column, value, 10**12)
     if kind == "name":
         return f"Person{n % 100000000:08d}"
+    if kind == "entity_name":
+        return f"Entity{n % 100000000:08d}"
     if kind == "address":
         return f"{n % 9999 + 1} Example Street"
     if kind == "date_shift":

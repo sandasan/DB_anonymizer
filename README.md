@@ -138,6 +138,7 @@ Add a transformation to a column under that table's `anonymize` object. These ex
 | `email` | `{"type": "email"}` | `user123456789@example.invalid` |
 | `phone` | `{"type": "phone"}` | `+15551234567` |
 | `name` | `{"type": "name"}` | `Person01234567` |
+| `entity_name` | `{"type": "entity_name"}` | A generic deterministic label such as `Entity01234567`, suitable for hotel, company, or other non-person names. |
 | `address` | `{"type": "address"}` | `1234 Example Street` |
 | `file_name` | `{"type": "file_name"}` | `reports/quarterly.pdf` becomes `file123456789.pdf` (directory components are removed; the extension is retained). |
 | `ip_address` | `{"type": "ip_address"}` | IPv4 becomes an address in `10.0.0.0/8`; IPv6 becomes an address in `2001:db8::/32`. Invalid input stops the copy with a column-specific error. |
