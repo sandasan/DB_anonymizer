@@ -145,6 +145,26 @@ def transform(value: Any, rule: dict[str, Any], table: str, column: str) -> Any:
         if isinstance(value, float):
             return float(result)
         return result
+    if kind == "coordinate_round":
+        try:
+            coordinate = Decimal(str(value))
+            precision = rule.get("precision", 2)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(f"coordinate_round requires a numeric coordinate and precision for {table}.{column}") from exc
+        if (not coordinate.is_finite() or isinstance(precision, bool)
+                or not isinstance(precision, int) or not 0 <= precision <= 6):
+            raise ValueError(f"coordinate_round precision must be between 0 and 6 for {table}.{column}")
+        name = column.casefold()
+        if name in {"lat", "latitude"} and not -90 <= coordinate <= 90:
+            raise ValueError(f"Latitude out of range in {table}.{column}")
+        if name in {"lon", "lng", "long", "longitude"} and not -180 <= coordinate <= 180:
+            raise ValueError(f"Longitude out of range in {table}.{column}")
+        result = coordinate.quantize(Decimal(1).scaleb(-precision))
+        if isinstance(value, int) and not isinstance(value, bool) and precision == 0:
+            return int(result)
+        if isinstance(value, float):
+            return float(result)
+        return result
     raise ValueError(f"Unsupported transformation {kind!r} for {table}.{column}")
 
 

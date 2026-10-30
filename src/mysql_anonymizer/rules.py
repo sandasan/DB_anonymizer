@@ -9,7 +9,7 @@ from .transformations import TEXT_DATA_TYPES
 _TEMPORAL_DATA_TYPES = {"date", "datetime", "timestamp"}
 _NUMERIC_DATA_TYPES = {"tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "real"}
 _TEXT_TRANSFORMS = {"email", "url", "phone", "payment_key", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "unique", "passport", "pnr_code", "location_generalization"}
-_SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "constant"}
+_SUPPORTED_TRANSFORMS = _TEXT_TRANSFORMS | {"date_shift", "date_round", "numeric_variance", "coordinate_round", "constant"}
 _TRANSFORM_MAX_LENGTH = {
     # Keep generated emails within common VARCHAR(32) columns.
     "email": len("user") + 12 + len("@example.invalid"),
@@ -100,6 +100,8 @@ def init_rules(tables: list[dict[str, Any]]) -> dict[str, Any]:
                 anonymize[name] = {"type": "name"}
             elif is_text and re.search(r"(^|_)(address|street|city|postal|zip)(_|[0-9]|$)", low):
                 anonymize[name] = {"type": "address"}
+            elif data_type in _NUMERIC_DATA_TYPES and low in {"lat", "latitude", "lon", "lng", "long", "longitude"}:
+                anonymize[name] = {"type": "coordinate_round", "precision": 2}
             elif data_type in _TEMPORAL_DATA_TYPES and re.search(r"birth|dob|date_of_birth", hints):
                 anonymize[name] = {"type": "date_shift"}
         rules["tables"][table["name"]] = {"preserve": sorted(set(preserve)), "anonymize": anonymize}
@@ -186,6 +188,14 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                     raise ValueError(f"numeric_variance percent must be between 0 and 100 for {tn}.{col}") from exc
                 if not 0 <= percent <= 100:
                     raise ValueError(f"numeric_variance percent must be between 0 and 100 for {tn}.{col}")
+            if kind == "coordinate_round":
+                if data_type not in _NUMERIC_DATA_TYPES:
+                    raise ValueError(f"coordinate_round configured for non-numeric column {tn}.{col} ({cols[col]['COLUMN_TYPE']})")
+                if low not in {"lat", "latitude", "lon", "lng", "long", "longitude"}:
+                    raise ValueError(f"coordinate_round requires a latitude or longitude column: {tn}.{col}")
+                precision = rule.get("precision", 2)
+                if isinstance(precision, bool) or not isinstance(precision, int) or not 0 <= precision <= 6:
+                    raise ValueError(f"coordinate_round precision must be between 0 and 6 for {tn}.{col}")
             if kind == "location_generalization" and rule.get("target") != "hotel_class":
                 raise ValueError(f"Unsupported location_generalization target for {tn}.{col}; use 'hotel_class'")
             if kind == "passport" and rule.get("country") not in {None, "GB", "gb"}:
