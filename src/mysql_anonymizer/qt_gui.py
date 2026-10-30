@@ -68,6 +68,20 @@ class TableSizeDelegate(QStyledItemDelegate):
         return str(value)
 
 
+class BrowseDataTable(QTableWidget):
+    """Allow Shift+wheel to scroll wide browse results horizontally."""
+
+    def wheelEvent(self, event) -> None:
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            delta = event.pixelDelta().y() or event.angleDelta().y()
+            if delta:
+                bar = self.horizontalScrollBar()
+                bar.setValue(bar.value() - delta)
+                event.accept()
+                return
+        super().wheelEvent(event)
+
+
 class AnonymizerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -425,7 +439,7 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 5)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         layout.addLayout(form)
-        self.browse_view = QTableWidget(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
+        self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
         self.browse_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         copy_cell = QPushButton("Copy selected cell for Lookup")
         copy_cell.setToolTip("Copy the selected cell with its table and column so it can be pasted into Lookup.")
