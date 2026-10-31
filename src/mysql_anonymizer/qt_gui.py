@@ -34,6 +34,7 @@ from .core import (
     list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
     save_json_atomic,
 )
+from .rules import validate_rules
 from .schema import expand_related_tables
 
 
@@ -157,6 +158,7 @@ class AnonymizerWindow(QMainWindow):
         self.tables: list[dict[str, Any]] = []
         self.table_names: list[str] = []
         self.destination_tables: set[str] = set()
+        self.destination_schema: dict[str, dict[str, Any]] = {}
         self.copied_tables: set[str] = set()
         self.browse_tables: dict[str, list[dict[str, Any]]] = {"source": [], "destination": []}
         self.mapping_fields: dict[str, list[str]] = {}
@@ -450,6 +452,11 @@ class AnonymizerWindow(QMainWindow):
         self.table_view.setMinimumHeight(300); layout.addWidget(self.table_view, 1)
         self.table_view.itemSelectionChanged.connect(self._selected_items_changed)
         layout.addWidget(QLabel("✓ marks tables present in the destination. Foreign-key dependencies are validated before copy."))
+        self.destination_width_notice = QLabel()
+        self.destination_width_notice.setWordWrap(True)
+        self.destination_width_notice.setStyleSheet("color: #a35b00")
+        self.destination_width_notice.hide()
+        layout.addWidget(self.destination_width_notice)
 
     def _build_rules(self) -> None:
         layout = self._scroll_page(self.rules_tab)
@@ -1097,7 +1104,9 @@ class AnonymizerWindow(QMainWindow):
         if not isinstance(result, tuple) or not result: return
         kind = result[0]
         if kind == "inspection":
-            _, self.tables, destination_tables, config = result
+            _, self.tables, destination_tables, config = result[:4]
+            destination_schema = result[4] if len(result) > 4 else []
+            self.destination_schema = {table["name"]: table for table in destination_schema}
             self.destination_tables = set(destination_tables)
             self.table_names = [t["name"] for t in self.tables]
             temporal = {"date", "datetime", "timestamp"}
@@ -1113,6 +1122,7 @@ class AnonymizerWindow(QMainWindow):
             self.copied_destination_identity = identity
             self.copied_tables.intersection_update(self.destination_tables)
             self.render_tables(); self.refresh_rules(); self.save_state()
+            self._update_destination_width_notice()
             status = f"Inspection complete. Found {len(self.tables)} source tables."
             if not date_tables:
                 status += " No tables have DATE, DATETIME, or TIMESTAMP columns for range selection."
@@ -1282,6 +1292,36 @@ class AnonymizerWindow(QMainWindow):
         try: config = self.config()
         except Exception as exc: return self.error("Invalid connection settings", exc)
         self._launch_database_operation("inspect", {"config": config}, "Inspecting source schema…")
+
+    def _update_destination_width_notice(self) -> None:
+        if not hasattr(self, "destination_width_notice"):
+            return
+        mismatches = []
+        for source_table in self.tables:
+            destination_table = self.destination_schema.get(source_table.get("name"))
+            if not destination_table:
+                continue
+            destination_columns = {c.get("COLUMN_NAME"): c for c in destination_table.get("columns", [])}
+            for source_column in source_table.get("columns", []):
+                name = source_column.get("COLUMN_NAME")
+                dest_column = destination_columns.get(name)
+                if not dest_column:
+                    continue
+                src_type = str(source_column.get("COLUMN_TYPE", ""))
+                dst_type = str(dest_column.get("COLUMN_TYPE", ""))
+                src_match = re.fullmatch(r"(?:var)?char\((\d+)\)", src_type, re.I)
+                dst_match = re.fullmatch(r"(?:var)?char\((\d+)\)", dst_type, re.I)
+                if src_match and dst_match and int(dst_match.group(1)) < int(src_match.group(1)):
+                    mismatches.append(f"{source_table['name']}.{name}: source {src_type}, destination {dst_type}")
+        if mismatches:
+            self.destination_width_notice.setText(
+                "Destination fields narrower than their source counterparts may truncate or reject copied values: "
+                + "; ".join(mismatches[:12])
+                + (f"; and {len(mismatches) - 12} more" if len(mismatches) > 12 else "")
+            )
+            self.destination_width_notice.show()
+        else:
+            self.destination_width_notice.hide()
 
     def test_connections(self) -> None:
         try: config = self.config()
@@ -1759,7 +1799,9 @@ class AnonymizerWindow(QMainWindow):
 
     @classmethod
     def _rule_compatibility(cls, data_type: str, column: str,
-                            rule: dict[str, Any] | None) -> tuple[bool, str]:
+                            rule: dict[str, Any] | None,
+                            source: dict[str, Any] | None = None,
+                            table: dict[str, Any] | None = None) -> tuple[bool, str]:
         if not isinstance(rule, dict):
             return True, ""
         kind = rule.get("type")
@@ -1793,6 +1835,17 @@ class AnonymizerWindow(QMainWindow):
         else:
             compatible = False
         if compatible:
+            # Reuse copy-time validation when schema metadata is available. This
+            # includes declared string widths, identifiers, auth fields and
+            # unique indexes, so the picker cannot offer a rule that copy rejects.
+            if source is not None and table is not None:
+                try:
+                    validate_rules(
+                        [table],
+                        {"tables": {table["name"]: {"preserve": [], "anonymize": {column: rule}}}},
+                    )
+                except ValueError as exc:
+                    return False, str(exc)
             return True, ""
         return False, f"{cls._rule_output_type(rule, data_type)} output is not compatible with {data_type or 'unknown source type'}"
 
@@ -1836,7 +1889,10 @@ class AnonymizerWindow(QMainWindow):
             source = self._source_column(item.text(0), item.text(1))
             if source is None:
                 continue
-            compatible, reason = self._rule_compatibility(source.get("DATA_TYPE", ""), item.text(1), rule)
+            schema_table = next((entry for entry in self.tables if entry.get("name") == item.text(0)), None)
+            compatible, reason = self._rule_compatibility(
+                source.get("DATA_TYPE", ""), item.text(1), rule, source, schema_table
+            )
             if not compatible:
                 issues.append(f"{item.text(0)}.{item.text(1)}: {reason}")
         if issues:
@@ -1870,8 +1926,10 @@ class AnonymizerWindow(QMainWindow):
                 compatible = True
                 for item in selected:
                     source = self._source_column(item.text(0), item.text(1))
+                    schema_table = next((entry for entry in self.tables if entry.get("name") == item.text(0)), None)
                     if source is not None and not self._rule_compatibility(
-                            source.get("DATA_TYPE", ""), item.text(1), candidate)[0]:
+                            source.get("DATA_TYPE", ""), item.text(1), candidate,
+                            source, schema_table)[0]:
                         compatible = False
                         break
                 if compatible:
@@ -2114,6 +2172,20 @@ class AnonymizerWindow(QMainWindow):
                     if not isinstance(options, dict):
                         raise ValueError("Transformation options must be a JSON object")
                     transform.update(options)
+                issues = []
+                for item in selected:
+                    source = self._source_column(item.text(0), item.text(1))
+                    schema_table = next((entry for entry in self.tables
+                                         if entry.get("name") == item.text(0)), None)
+                    if source is not None:
+                        compatible, reason = self._rule_compatibility(
+                            source.get("DATA_TYPE", ""), item.text(1), transform,
+                            source, schema_table,
+                        )
+                        if not compatible:
+                            issues.append(f"{item.text(0)}.{item.text(1)}: {reason}")
+                if issues:
+                    return self.info("Incompatible anonymization type", "; ".join(issues))
             for item in selected:
                 table, col = item.text(0), item.text(1)
                 spec = rules.setdefault("tables", {}).setdefault(table, {})

@@ -127,9 +127,11 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
             source.close()
 
         destination_tables: list[str] = []
+        destination_schema: list[dict[str, Any]] = []
         try:
             dest = connect(config["destination"])
             try:
+                destination_schema = inspect_schema(dest, config["destination"]["database"])
                 cursor = dest.cursor()
                 cursor.execute(
                     "SELECT TABLE_NAME FROM information_schema.TABLES "
@@ -142,7 +144,7 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                 dest.close()
         except Exception:
             pass
-        return ["inspection", tables, destination_tables, config]
+        return ["inspection", tables, destination_tables, config, destination_schema]
 
     if operation == "test_connections":
         reports = []
