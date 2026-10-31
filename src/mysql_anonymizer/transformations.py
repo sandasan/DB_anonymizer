@@ -180,7 +180,10 @@ def unique_text(value: Any, candidate: Any, table: str, column: str, max_length:
     if value in mapping:
         return mapping[value]
     candidate = str(candidate)
-    if 0 < len(candidate) <= max_length and candidate not in used:
+    # MySQL's common text collations compare strings without case sensitivity.
+    # Track that broader equivalence so generated values remain distinct there.
+    used_keys = {item.casefold() for item in used}
+    if 0 < len(candidate) <= max_length and candidate.casefold() not in used_keys:
         mapping[value] = candidate
         used.add(candidate)
         return candidate
@@ -190,7 +193,7 @@ def unique_text(value: Any, candidate: Any, table: str, column: str, max_length:
     # A collision can occur after truncation or with a low-cardinality transform.
     # Encode a deterministic digest in a compact alphabet so even short columns
     # can hold distinct pseudonyms when their value space permits it.
-    alphabet = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
     capacity = len(alphabet) ** max_length
     if len(used) >= capacity:
         raise ValueError(f"Could not create a unique anonymized value for {table}.{column}; its maximum length may be too short")
@@ -203,7 +206,7 @@ def unique_text(value: Any, candidate: Any, table: str, column: str, max_length:
             number, digit = divmod(number, len(alphabet))
             chars.append(alphabet[digit])
         replacement = "".join(reversed(chars))
-        if replacement not in used:
+        if replacement.casefold() not in used_keys:
             mapping[value] = replacement
             used.add(replacement)
             return replacement

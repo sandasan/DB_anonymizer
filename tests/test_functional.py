@@ -91,6 +91,16 @@ class RulesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Authentication column"):
             validate_rules(TABLES, bad_password)
 
+    def test_unique_text_column_accepts_constant_for_automatic_collision_resolution(self):
+        unique_table = [{"name": "items", "foreign_key_columns": [], "columns": [
+            column("id", "int", "int", "PRI"),
+            {**column("name"), "IS_UNIQUE": True},
+        ]}]
+        rules = {"tables": {"items": {"preserve": ["id"], "anonymize": {
+            "name": {"type": "constant", "value": "redacted"},
+        }}}}
+        validate_rules(unique_table, rules)
+
 
 class TransformationTests(unittest.TestCase):
     def test_text_transformations_are_deterministic_and_keep_nulls(self):

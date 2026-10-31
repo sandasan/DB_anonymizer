@@ -31,6 +31,26 @@ def inspect_schema(conn, schema: str) -> list[dict[str, Any]]:
                 key: value for key, value in column.items() if key != "TABLE_NAME"
             })
 
+        # COLUMN_KEY only reports UNI for a single-column unique index. Columns
+        # participating in a composite unique index need the same collision
+        # protection during anonymization, so record all unique-index members.
+        cur.execute(
+            "SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA=%s AND NON_UNIQUE=0",
+            (schema,),
+        )
+        unique_columns: dict[str, set[str]] = {}
+        for index_column in cur.fetchall():
+            unique_columns.setdefault(index_column["TABLE_NAME"], set()).add(
+                index_column["COLUMN_NAME"]
+            )
+        for table_name, columns in columns_by_table.items():
+            unique = unique_columns.get(table_name, set())
+            for column in columns:
+                column["IS_UNIQUE"] = (
+                    column["COLUMN_NAME"] in unique or column["COLUMN_KEY"] == "UNI"
+                )
+
         cur.execute(
             "SELECT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_SCHEMA, "
             "REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME, ORDINAL_POSITION "

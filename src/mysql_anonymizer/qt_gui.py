@@ -1341,7 +1341,7 @@ class AnonymizerWindow(QMainWindow):
     @staticmethod
     def schema_fingerprint(tables: list[dict[str, Any]]) -> str:
         import hashlib
-        structure = [{"name": t["name"], "engine": t.get("engine"), "references": sorted(t.get("references", [])), "external_references": sorted(t.get("external_references", [])), "foreign_keys": t.get("foreign_keys", []), "columns": [{k: c.get(k) for k in ("COLUMN_NAME", "DATA_TYPE", "COLUMN_TYPE", "IS_NULLABLE", "COLUMN_KEY", "EXTRA")} for c in t.get("columns", [])]} for t in tables]
+        structure = [{"name": t["name"], "engine": t.get("engine"), "references": sorted(t.get("references", [])), "external_references": sorted(t.get("external_references", [])), "foreign_keys": t.get("foreign_keys", []), "columns": [{k: c.get(k) for k in ("COLUMN_NAME", "DATA_TYPE", "COLUMN_TYPE", "IS_NULLABLE", "COLUMN_KEY", "IS_UNIQUE", "EXTRA")} for c in t.get("columns", [])]} for t in tables]
         return hashlib.sha256(json.dumps(structure, sort_keys=True, default=str).encode()).hexdigest()
 
     def _date_range_toggled(self, enabled: bool) -> None:

@@ -84,6 +84,7 @@ def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
                         "COLUMN_TYPE",
                         "IS_NULLABLE",
                         "COLUMN_KEY",
+                        "IS_UNIQUE",
                         "EXTRA",
                     )
                 }

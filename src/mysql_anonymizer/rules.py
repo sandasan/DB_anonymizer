@@ -209,7 +209,8 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                 raise ValueError(f"Unsupported passport country format for {tn}.{col}; supported country is 'GB'")
             column_type = cols[col]["COLUMN_TYPE"]
             length_match = re.fullmatch(r"(?:var)?char\((\d+)\)", column_type, re.I)
-            if length_match and (cols[col]["COLUMN_KEY"] != "UNI" or kind == "password"):
+            is_unique = cols[col].get("IS_UNIQUE", cols[col]["COLUMN_KEY"] == "UNI")
+            if length_match and (not is_unique or kind == "password"):
                 max_length = int(length_match.group(1))
                 # The copier shortens unique pseudonyms to the declared column
                 # width and resolves collisions, including for narrow unique indexes.
@@ -223,10 +224,8 @@ def validate_rules(tables: list[dict[str, Any]], rules: dict[str, Any]) -> None:
                         f"Transformation {kind!r} may produce {required_length} characters, "
                         f"but {tn}.{col} is limited to {max_length}; use a wider column or a shorter rule"
                     )
-            if cols[col]["COLUMN_KEY"] == "UNI":
+            if is_unique:
                 if cols[col]["DATA_TYPE"].lower() not in TEXT_DATA_TYPES:
                     raise ValueError(f"Unique non-text column {tn}.{col} requires an application-specific transformation")
-                if kind not in _TEXT_TRANSFORMS:
-                    raise ValueError(f"Unique text column {tn}.{col} requires a text transformation such as name or unique")
             if kind not in _SUPPORTED_TRANSFORMS:
                 raise ValueError(f"Unsupported transform for {tn}.{col}")
