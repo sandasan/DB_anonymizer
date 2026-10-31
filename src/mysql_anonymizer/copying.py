@@ -569,9 +569,13 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
             else:
                 src.execute(f"SELECT COUNT(*) FROM {qname(schema, table['name'])}")
                 row_totals[table["name"]] = src.fetchone()[0]
-        total_rows = sum(row_totals.values())
+        # Progress includes tables completed before a resume. Include their
+        # checkpointed row counts in the denominator as well, even though they
+        # are omitted from ``tables`` and will not be copied again.
+        total_rows = sum(row_totals.values()) + sum(counts.values())
+        total_tables = len(tables) + len(counts)
         if progress_callback:
-            progress_callback({"event": "start", "total_tables": len(tables), "total_rows": total_rows,
+            progress_callback({"event": "start", "total_tables": total_tables, "total_rows": total_rows,
                                "selected_tables": [table["name"] for table in tables],
                                "completed_tables": len(counts), "completed_rows": sum(counts.values())})
         dst.execute("SET FOREIGN_KEY_CHECKS=0")
@@ -595,7 +599,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 destination.commit()
             if progress_callback:
                 progress_callback({"event": "table", "table": name,
-                                   "table_index": table_positions[name], "total_tables": len(tables),
+                                   "table_index": table_positions[name], "total_tables": total_tables,
                                    "table_rows": row_totals[name], "copied_rows": 0,
                                    "total_rows": total_rows, "completed_rows": sum(counts.values()),
                                    "completed_tables": len(counts)})
@@ -717,7 +721,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                     mapping_db.commit()
                 if progress_callback:
                     progress_callback({"event": "batch", "table": name,
-                                       "table_index": table_positions[name], "total_tables": len(tables),
+                                       "table_index": table_positions[name], "total_tables": total_tables,
                                        "table_rows": row_totals[name], "copied_rows": count,
                                        "total_rows": total_rows,
                                        "completed_rows": sum(counts.values()) + count,
@@ -730,7 +734,7 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
                 mapping_db.commit()
             if progress_callback:
                 progress_callback({"event": "table_done", "table": name,
-                                   "table_index": table_positions[name], "total_tables": len(tables),
+                                   "table_index": table_positions[name], "total_tables": total_tables,
                                    "table_rows": row_totals[name], "copied_rows": count,
                                    "total_rows": total_rows,
                                    "completed_rows": sum(counts.values()),
