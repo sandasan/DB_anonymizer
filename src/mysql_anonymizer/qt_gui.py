@@ -480,6 +480,7 @@ class AnonymizerWindow(QMainWindow):
         for label, value in (("All compatibility", "all"), ("Compatible", "compatible"),
                              ("Incompatible", "incompatible"), ("Not checked", "not_checked")):
             self.rule_compatibility_status_filter.addItem(label, value)
+        self.rule_compatibility_status_filter.addItem("Width incompatible", "width_incompatible")
         self.rule_compatibility_status_filter.currentIndexChanged.connect(self.refresh_rules)
         controls.addWidget(self.rule_search, 1); controls.addWidget(self.rule_status)
         controls.addWidget(self.rule_compatibility_status_filter); layout.addLayout(controls)
@@ -1984,18 +1985,30 @@ class AnonymizerWindow(QMainWindow):
                     data_type = source_column.get("DATA_TYPE", "") if source_column else ""
                     source_type = source_column.get("COLUMN_TYPE", data_type) if source_column else "—"
                     output_type = self._rule_output_type(configured_rule, data_type)
-                    compatible, reason = self._rule_compatibility(data_type, col, configured_rule)
-                    compatibility = "—" if not configured_rule or source_column is None else ("Compatible" if compatible else "Incompatible")
+                    schema_table = next((entry for entry in self.tables if entry.get("name") == table), None)
+                    compatible, reason = self._rule_compatibility(
+                        data_type, col, configured_rule, source_column, schema_table
+                    )
+                    width_incompatible = not compatible and "may produce" in reason and "limited to" in reason
+                    compatibility = ("—" if not configured_rule or source_column is None else
+                                     "Width incompatible" if width_incompatible else
+                                     "Compatible" if compatible else "Incompatible")
                     if query and query not in f"{table} {col} {source_type} {output_type} {compatibility} {status}".casefold(): continue
                     if compatibility_filter == "compatible" and compatibility != "Compatible": continue
                     if compatibility_filter == "incompatible" and compatibility != "Incompatible": continue
+                    if compatibility_filter == "width_incompatible" and not width_incompatible: continue
                     if compatibility_filter == "not_checked" and compatibility != "—": continue
                     if status_filter == "Anonymized" and not status.startswith("Anonymized"): continue
                     if status_filter == "Preserved" and status != status_filter: continue
                     if status_filter == "Unconfigured" and status != status_filter: continue
                     if status_filter == "Needs attention" and status not in {"Table not in source", "Column not in source", "Conflict: preserve + anonymize", "Unconfigured"} and compatible: continue
                     tooltip = reason if not compatible else ""
-                    item = QTreeWidgetItem([table, col, source_type or "—", output_type, compatibility, status]); item.setToolTip(4, tooltip); self.rule_tree.addTopLevelItem(item)
+                    item = QTreeWidgetItem([table, col, source_type or "—", output_type, compatibility, status])
+                    item.setToolTip(4, tooltip)
+                    if width_incompatible:
+                        item.setToolTip(5, reason)
+                        item.setText(5, status + " · width too small")
+                    self.rule_tree.addTopLevelItem(item)
             self._update_rule_compatibility_notice()
         except (json.JSONDecodeError, AttributeError, TypeError) as exc:
             if hasattr(self, "rule_tree"): self.rule_tree.clear()
