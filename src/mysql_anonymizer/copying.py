@@ -443,7 +443,10 @@ def copy_database(source, destination, schema: str, rules: dict[str, Any], batch
         roots = {*date_range.get("date_tables", []), *date_range.get("full_tables", [])}
         if not roots.issubset(explicitly_selected):
             raise ValueError("Every date-range anchor table must be selected for copying")
-        selected_names = roots
+        # A failed table can be explicitly skipped when resuming. Apply that
+        # choice before rule validation too; otherwise an invalid saved rule for
+        # the failed table prevents the remaining date-range copy from starting.
+        selected_names = roots - skipped_tables
     else:
         selected_names = set(resolve_table_selection(
             all_tables, selected_tables, include_dependencies, existing_destination_tables))

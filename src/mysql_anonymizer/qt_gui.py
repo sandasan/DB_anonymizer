@@ -1675,7 +1675,13 @@ class AnonymizerWindow(QMainWindow):
 
     def pause_or_resume(self) -> None:
         if self.copy_resume and self.pause_event is None:
-            state = self.copy_resume; self.pause_event = threading.Event(); self.pause_btn.setText("Pause copy"); self._launch_copy(state)
+            state = self.copy_resume
+            try:
+                self._refresh_resume_rules(state)
+            except Exception as exc:
+                return self.error("Could not resume copy", exc)
+            self.write_checkpoint(state)
+            self.pause_event = threading.Event(); self.pause_btn.setText("Pause copy"); self._launch_copy(state)
         elif self.pause_event:
             self.pause_event.set()
             if self._copy_worker_paths is not None:
@@ -1692,6 +1698,8 @@ class AnonymizerWindow(QMainWindow):
         if not self.confirm("Remove failed table", f"Drop the incomplete destination table {table!r}, discard its saved lookup mappings, skip it, and resume the remaining tables?"):
             return
         try:
+            self._refresh_resume_rules(state)
+            self.write_checkpoint(state)
             config = state["config"]
             self._launch_database_operation(
                 "discard_partial_table",
@@ -1701,6 +1709,14 @@ class AnonymizerWindow(QMainWindow):
             )
         except Exception as exc:
             self.error("Could not remove incomplete table", exc)
+
+    def _refresh_resume_rules(self, state: dict[str, Any]) -> None:
+        """Use the rules currently shown in the editor for a resumed copy."""
+        raw = self.rules_text.toPlainText().strip()
+        rules = json.loads(raw) if raw else {}
+        if not isinstance(rules, dict):
+            raise ValueError("Rules must be a JSON object")
+        state["rules"] = rules
 
     def _offer_resume(self) -> None:
         try:
