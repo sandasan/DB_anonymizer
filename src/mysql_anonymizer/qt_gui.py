@@ -1409,6 +1409,10 @@ class AnonymizerWindow(QMainWindow):
                 self.table_view.blockSignals(False)
         self.saved_selection = [table["name"] for table in self.tables if table["name"] in selected]
         self.save_state()
+        # Dependency selection can add tables after the original row selection.
+        # Rebuild now so the selected-at-top ordering uses the expanded set.
+        if self.selected_top_check.isChecked():
+            self.render_tables()
 
     def copy_selected(self) -> None:
         self.copy("copy")
