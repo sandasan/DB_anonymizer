@@ -34,6 +34,32 @@ def lookup_mapping(path: str, table: str, column: str, value: str,
         return [row[0] for row in db.execute(sql, params)]
 
 
+def lookup_original_value(path: str, value: str) -> list[tuple[str, str, str]]:
+    """Find original values for an anonymized value across all mapped fields."""
+    with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        return db.execute(
+            "SELECT DISTINCT table_name, column_name, original_value FROM mappings "
+            "WHERE anonymized_value=? ORDER BY table_name, column_name, original_value",
+            (value,),
+        ).fetchall()
+
+
+def lookup_value_all_fields(path: str, value: str, direction: str) -> list[tuple[str, str, str]]:
+    """Find values across all mapped fields, returning table, column, and match."""
+    if direction == "original-to-anonymized":
+        match_column, result_column = "original_value", "anonymized_value"
+    elif direction == "anonymized-to-original":
+        match_column, result_column = "anonymized_value", "original_value"
+    else:
+        raise ValueError(f"Unsupported lookup direction {direction!r}")
+    with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        return db.execute(
+            f"SELECT DISTINCT table_name, column_name, {result_column} FROM mappings "
+            f"WHERE {match_column}=? ORDER BY table_name, column_name, {result_column}",
+            (value,),
+        ).fetchall()
+
+
 def list_mapping_fields(path: str) -> dict[str, list[str]]:
     """Return the tables and columns recorded in an existing mapping store."""
     fields: dict[str, list[str]] = {}

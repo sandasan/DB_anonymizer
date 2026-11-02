@@ -31,7 +31,7 @@ from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from .cli import check_config
 from .core import (
-    init_rules, list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
+    init_rules, list_mapping_fields, load_json, lookup_mapping, lookup_value_all_fields, prune_rules_to_schema,
     save_json_atomic,
 )
 from .rules import validate_rules
@@ -551,10 +551,12 @@ class AnonymizerWindow(QMainWindow):
         self.lookup_table = QComboBox(); self.lookup_table.setEditable(False)
         self.lookup_column_filter = QLineEdit(); self.lookup_column_filter.setPlaceholderText("Filter fields")
         self.lookup_column = QComboBox(); self.lookup_value = QLineEdit()
+        self.lookup_all_fields = QCheckBox("Search all tables and fields")
         self.lookup_value.textChanged.connect(self._accept_browse_cell_payload)
         self.lookup_direction = QComboBox(); self.lookup_direction.addItem("Original → anonymized", "original-to-anonymized"); self.lookup_direction.addItem("Anonymized → original", "anonymized-to-original")
-        for label, widget in (("Filter tables", self.lookup_table_filter), ("Table", self.lookup_table), ("Filter fields", self.lookup_column_filter), ("Field", self.lookup_column), ("Exact value", self.lookup_value), ("Direction", self.lookup_direction)):
+        for label, widget in (("", self.lookup_all_fields), ("Filter tables", self.lookup_table_filter), ("Table", self.lookup_table), ("Filter fields", self.lookup_column_filter), ("Field", self.lookup_column), ("Exact value", self.lookup_value), ("Direction", self.lookup_direction)):
             form.addRow(label, widget)
+        self.lookup_all_fields.toggled.connect(self._toggle_lookup_scope)
         layout.addLayout(form)
         buttons = QHBoxLayout(); load_btn = QPushButton("Load fields"); load_btn.clicked.connect(self.load_lookup_fields)
         find_btn = QPushButton("Find mapping"); find_btn.clicked.connect(self.lookup)
@@ -562,7 +564,7 @@ class AnonymizerWindow(QMainWindow):
         buttons.addWidget(load_btn); buttons.addWidget(find_btn); buttons.addWidget(reset); buttons.addStretch(1); layout.addLayout(buttons)
         self.lookup_table_filter.textChanged.connect(self.filter_lookup_tables); self.lookup_column_filter.textChanged.connect(self.filter_lookup_columns)
         self.lookup_table.currentTextChanged.connect(self.filter_lookup_columns)
-        layout.addWidget(QLabel("Searches the selected SQLite mapping store. Matching is exact.")); layout.addStretch(1)
+        layout.addWidget(QLabel("Searches the selected SQLite mapping store. Matching is exact; all-fields search checks every mapped table and field in the selected direction.")); layout.addStretch(1)
 
     def _build_browse(self) -> None:
         layout = self._scroll_page(self.browse_tab)
@@ -1175,6 +1177,11 @@ class AnonymizerWindow(QMainWindow):
         elif kind == "lookup":
             _, direction, table, column, value, matches = result
             self.log_message("\n".join(matches) if matches else f"No matching value found for {table}.{column} = {value!r}.")
+        elif kind == "lookup_all":
+            _, direction, value, matches = result
+            label = "anonymized" if direction == "original-to-anonymized" else "original"
+            lines = [f"{table}.{column}: {mapped}" for table, column, mapped in matches]
+            self.log_message("\n".join(lines) if lines else f"No {label} value found for {value!r} across mapped fields.")
         elif kind == "browse_tables":
             _, role, tables = result; self.browse_tables[role] = tables; self.filter_browse_tables(); self.status.setText(f"Loaded {len(tables)} {role} tables.")
             if role == "source" and self._pending_browse_table:
@@ -2258,6 +2265,10 @@ class AnonymizerWindow(QMainWindow):
     def reset_lookup(self) -> None:
         self.lookup_table_filter.clear(); self.lookup_column_filter.clear(); self.lookup_value.clear()
 
+    def _toggle_lookup_scope(self, enabled: bool) -> None:
+        for widget in (self.lookup_table_filter, self.lookup_table, self.lookup_column_filter, self.lookup_column):
+            widget.setEnabled(not enabled)
+
     def copy_browse_cell_for_lookup(self) -> None:
         row, column = self.browse_view.currentRow(), self.browse_view.currentColumn()
         item = self.browse_view.item(row, column) if row >= 0 and column >= 0 else None
@@ -2301,12 +2312,21 @@ class AnonymizerWindow(QMainWindow):
 
     def lookup(self) -> None:
         path, table, column = self.mapping_edit.text().strip(), self.lookup_table.currentText(), self.lookup_column.currentText()
-        if not path or not table or not column: return self.info("Complete lookup fields", "Select a mapping store, table, and field.")
-        self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData())
+        if not path: return self.info("Select mapping store", "Choose a mapping store first.")
+        if self.lookup_all_fields.isChecked():
+            self.run_task("Searching mappings…", self._lookup_all_worker, path, self.lookup_value.text(), self.lookup_direction.currentData())
+        elif not table or not column:
+            return self.info("Complete lookup fields", "Select a mapping store, table, and field.")
+        else:
+            self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData())
 
     @staticmethod
     def _lookup_worker(path: str, table: str, column: str, value: str, direction: str, progress: Callable) -> tuple:
         return ("lookup", direction, table, column, value, lookup_mapping(path, table, column, value, direction))
+
+    @staticmethod
+    def _lookup_all_worker(path: str, value: str, direction: str, progress: Callable) -> tuple:
+        return ("lookup_all", direction, value, lookup_value_all_fields(path, value, direction))
 
     # Source/destination browsing
     def load_browse_tables(self) -> None:

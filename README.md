@@ -186,7 +186,7 @@ Use **Load config** and **Load rules** to open JSON files, and **Save config as*
 
 Use **Save profile** and **Load profile** to keep named config, rules, mapping-store paths, and copy options. Profiles and the GUI's recent paths, table selections, and copy checkpoints are stored in the app configuration directory. Profiles and copy checkpoints use owner-only file permissions. A profile stores the mapping-store path, not a copy of the mapping database. The auto-confirm option skips routine copy and table-action prompts; destructive whole-database actions still require typing the destination name.
 
-For GUI lookups, choose or create a mapping store at the top of the window and copy data with that path selected. If no mapping store is selected, the GUI warns that the copy will not save mappings and asks whether to continue unless auto-confirm is enabled. Open the **Lookup** tab and use **Load fields** to populate the table and column dropdowns from the store. Choose a table and column, enter the exact value, then choose original-to-anonymized or anonymized-to-original. The search uses the mapping store and may return multiple matches. The dropdowns refresh after a copy when a mapping store is selected.
+For GUI lookups, choose or create a mapping store at the top of the window and copy data with that path selected. If no mapping store is selected, the GUI warns that the copy will not save mappings and asks whether to continue unless auto-confirm is enabled. Open the **Lookup** tab and use **Load fields** to populate the table and column dropdowns from the store. Choose a table and column, enter the exact value, then choose original-to-anonymized or anonymized-to-original. Enable **Search all tables and fields** to look up a value in either direction without selecting its source table or column; results include each matching table and field. The search uses the mapping store and may return multiple matches. The dropdowns refresh after a copy when a mapping store is selected.
 
 Run these commands from the project directory:
 
@@ -264,9 +264,11 @@ Search in either direction by table and column:
 ```bash
 mysql-anonymizer lookup --mapping-store private-mappings.sqlite3 --table customers --column phone --value '+1 555 0100' --direction original-to-anonymized
 mysql-anonymizer lookup --mapping-store private-mappings.sqlite3 --table customers --column phone --value '+15551234567' --direction anonymized-to-original
+mysql-anonymizer lookup --mapping-store private-mappings.sqlite3 --value '+15551234567' --direction anonymized-to-original
+mysql-anonymizer lookup --mapping-store private-mappings.sqlite3 --value '+1 555 0100' --direction original-to-anonymized
 ```
 
-The lookup is exact and returns every matching value (an anonymized value can correspond to more than one original value for non-unique transformations). It indexes only configured anonymized columns; preserved columns are not recorded.
+The lookup is exact and returns every matching value (an anonymized value can correspond to more than one original value for non-unique transformations). Omit both `--table` and `--column` to search across all mapped tables and columns in either direction; results show the source table and column. It indexes only configured anonymized columns; preserved columns are not recorded.
 
 The source should be accessed through a read-only account; the destination user should only have access to the destination schema. Destination must be empty. The tool never drops or truncates objects. It currently copies base tables and rows, not views, triggers, procedures, events, or grants. Review app-specific columns, free text, and JSON manually. Protect the resulting database like production credentials.
 

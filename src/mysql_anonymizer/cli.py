@@ -4,7 +4,9 @@ import argparse
 import json
 import sys
 
-from .core import connect, copy_database, init_rules, inspect_schema, load_json, lookup_mapping, migrate_identifier_rules, save_json_atomic
+from .core import (connect, copy_database, init_rules, inspect_schema, load_json,
+                   lookup_mapping, lookup_value_all_fields, migrate_identifier_rules,
+                   save_json_atomic)
 
 
 def check_config(config: dict) -> None:
@@ -41,17 +43,22 @@ def main() -> None:
                            help="Automatically include referenced tables, recursively")
         if command == "lookup":
             p.add_argument("--mapping-store", required=True)
-            p.add_argument("--table", required=True)
-            p.add_argument("--column", required=True)
+            p.add_argument("--table", help="Source table (omit with --column to search all fields)")
+            p.add_argument("--column", help="Source column (omit with --table to search all fields)")
             p.add_argument("--value", required=True)
             p.add_argument("--direction", choices=("original-to-anonymized", "anonymized-to-original"), required=True)
     args = parser.parse_args()
     try:
         if args.command == "lookup":
-            results = lookup_mapping(args.mapping_store, args.table, args.column, args.value, args.direction)
+            if bool(args.table) != bool(args.column):
+                raise ValueError("--table and --column must be provided together")
+            if args.table:
+                results = lookup_mapping(args.mapping_store, args.table, args.column, args.value, args.direction)
+            else:
+                results = lookup_value_all_fields(args.mapping_store, args.value, args.direction)
             if results:
                 for result in results:
-                    print(result)
+                    print("\t".join(result) if isinstance(result, tuple) else result)
             else:
                 print("No matching mapping found", file=sys.stderr)
                 raise SystemExit(2)
