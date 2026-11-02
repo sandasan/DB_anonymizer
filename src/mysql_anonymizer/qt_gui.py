@@ -31,7 +31,7 @@ from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from .cli import check_config
 from .core import (
-    list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
+    init_rules, list_mapping_fields, load_json, lookup_mapping, prune_rules_to_schema,
     save_json_atomic,
 )
 from .rules import validate_rules
