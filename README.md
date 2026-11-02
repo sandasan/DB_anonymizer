@@ -48,14 +48,14 @@ Run the following SQL in the MySQL prompt:
 -- Create a local account for the anonymizer to create and populate tables
 CREATE USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';
 
--- Allow table creation, row insertion, indexes, foreign keys, and clearing a partial table on resume
-GRANT CREATE, INSERT, DELETE, INDEX, REFERENCES ON `development_database`.* TO 'anonymizer_writer'@'localhost';
+-- Allow table creation, row insertion, browsing destination data, indexes, foreign keys, and clearing a partial table on resume
+GRANT CREATE, SELECT, INSERT, DELETE, INDEX, REFERENCES ON `development_database`.* TO 'anonymizer_writer'@'localhost';
 
 -- Confirm the account's privileges
 SHOW GRANTS FOR 'anonymizer_writer'@'localhost';
 ```
 
-Set `destination.user`, `destination.database`, and `MYSQL_DESTINATION_PASSWORD` in the CLI configuration/environment to match this account. The account host must match where the CLI connects from, just as for the source user. If the account already exists but its password is wrong, update it as an administrator with `ALTER USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';`. If the schema name, username, host, and password all match but access is denied, check the server's account host matching and grants with `SHOW GRANTS`.
+Set `destination.user`, `destination.database`, and `MYSQL_DESTINATION_PASSWORD` in the CLI configuration/environment to match this account. `SELECT` is needed to browse destination table data in the GUI. The account host must match where the CLI connects from, just as for the source user. If the account already exists but its password is wrong, update it as an administrator with `ALTER USER 'anonymizer_writer'@'localhost' IDENTIFIED BY 'choose-another-strong-password';`. If the schema name, username, host, and password all match but access is denied, check the server's account host matching and grants with `SHOW GRANTS`.
 
 In the GUI, **Recreate selected tables** drops and recopies the selected tables plus every table connected to them through same-schema foreign keys, recursively. The confirmation lists all tables that will be replaced; this requires `DROP` on those tables. **Clear destination data** drops every base table in the configured destination schema and resets the saved copy checkpoint and copied/recreated marks; it requires `DROP` on those tables. The database itself is kept. **Recreate destination DB** drops and recreates the configured destination schema, then copies all source tables; this requires database-level `DROP` and `CREATE` privileges. The normal writer account above intentionally lacks these privileges. Use a dedicated maintenance account for these actions, and never grant them on the source database.
 
@@ -89,7 +89,7 @@ CREATE USER 'anonymizer_readonly'@'%' IDENTIFIED BY 'choose-a-source-password';
 GRANT SELECT, SHOW VIEW ON `source_database`.* TO 'anonymizer_readonly'@'%';
 
 CREATE USER 'anonymizer_writer'@'%' IDENTIFIED BY 'choose-a-destination-password';
-GRANT CREATE, INSERT, DELETE, INDEX, REFERENCES ON `anonymized_copy`.* TO 'anonymizer_writer'@'%';
+GRANT CREATE, SELECT, INSERT, DELETE, INDEX, REFERENCES ON `anonymized_copy`.* TO 'anonymizer_writer'@'%';
 ```
 
 If `allow_source_table_locks` is enabled for non-InnoDB tables, also grant:
@@ -284,7 +284,7 @@ DROP DATABASE `development_database`;
 CREATE DATABASE `development_database`;
 ```
 
-If the destination user loses access after recreating the schema, reapply its `GRANT CREATE, INSERT, DELETE, INDEX, REFERENCES` statement. `DELETE` is used to clear a partially copied table when resuming a paused GUI copy. Then check that the destination is empty before retrying:
+If the destination user loses access after recreating the schema, reapply its `GRANT CREATE, SELECT, INSERT, DELETE, INDEX, REFERENCES` statement. `SELECT` is needed to browse destination data; `DELETE` is used to clear a partially copied table when resuming a paused GUI copy. Then check that the destination is empty before retrying:
 
 ```sql
 SELECT TABLE_NAME
