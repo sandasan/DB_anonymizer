@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from PySide6.QtCore import QByteArray, QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, QDateTime
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QDialog, QDialogButtonBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit, QMenu,
@@ -74,6 +74,8 @@ class TableSizeDelegate(QStyledItemDelegate):
 class BrowseDataTable(QTableWidget):
     """Allow Shift+wheel to scroll wide browse results horizontally."""
 
+    fullValueRequested = Signal(object)
+
     def wheelEvent(self, event) -> None:
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             delta = event.pixelDelta().y() or event.angleDelta().y()
@@ -83,6 +85,15 @@ class BrowseDataTable(QTableWidget):
                 event.accept()
                 return
         super().wheelEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        item = self.itemAt(event.pos())
+        if item is None:
+            return
+        menu = QMenu(self)
+        view_value = menu.addAction("View full value")
+        view_value.triggered.connect(lambda: self.fullValueRequested.emit(item))
+        menu.exec(event.globalPos())
 
 
 class CheckableComboBox(QComboBox):
@@ -616,6 +627,7 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4)
         layout.addLayout(form)
         self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(180)
+        self.browse_view.fullValueRequested.connect(self.show_browse_cell_value)
         self.browse_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.browse_view.cellDoubleClicked.connect(self._navigate_browse_reference)
         copy_cell = QPushButton("Copy selected cell for Lookup")
@@ -2569,6 +2581,23 @@ class AnonymizerWindow(QMainWindow):
                     item.setToolTip(f"Double-click to open the referenced row in {reference_columns[columns[c]]}")
                 self.browse_view.setItem(r, c, item)
         self.browse_view.resizeColumnsToContents()
+
+    def show_browse_cell_value(self, item: QTableWidgetItem) -> None:
+        value = item.data(Qt.ItemDataRole.UserRole)
+        text = "NULL" if value is None else str(value)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Cell value")
+        dialog.resize(640, 420)
+        layout = QVBoxLayout(dialog)
+        editor = QPlainTextEdit(dialog)
+        editor.setReadOnly(True)
+        editor.setPlainText(text)
+        layout.addWidget(editor)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dialog)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
