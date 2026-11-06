@@ -153,6 +153,8 @@ class AnonymizerWindow(QMainWindow):
         self._copy_stderr_handle = None
         self._copy_progress_mtime_ns: int | None = None
         self._active_worker_mode = "copy"
+        self._active_operation: str | None = None
+        self._cancel_requested = False
         self._last_progress_ui_update = 0.0
         self.busy = False
         self.tables: list[dict[str, Any]] = []
@@ -1072,12 +1074,15 @@ class AnonymizerWindow(QMainWindow):
                  *self.passwords.values())
         for edit in edits:
             edit.setEnabled(not busy)
-        self.pause_btn.setEnabled(self.copy_resume is not None or self.pause_event is not None)
+        searching = busy and self._active_operation == "browse_search_database"
+        self.pause_btn.setText("Cancel search" if searching else "Pause copy")
+        self.pause_btn.setEnabled(searching or self.copy_resume is not None or self.pause_event is not None)
         self.skip_failed_btn.setEnabled(not busy and self.copy_resume is not None and self.failed_copy_table is not None)
 
     def on_finished(self) -> None:
         self.busy = False; self._set_busy(False)
         self._active_task = None
+        self._active_operation = None
         if self._copy_progress_timer is not None:
             self._copy_progress_timer.stop()
             self._copy_progress_timer.deleteLater()
@@ -1594,6 +1599,8 @@ class AnonymizerWindow(QMainWindow):
         paths["job_path"].chmod(0o600)
         self._copy_worker_paths = paths
         self._active_worker_mode = "operation"
+        self._active_operation = operation
+        self._cancel_requested = False
         self._copy_progress_mtime_ns = None
         self._copy_progress_timer = QTimer(self)
         self._copy_progress_timer.setInterval(1000)
@@ -1602,6 +1609,9 @@ class AnonymizerWindow(QMainWindow):
         self.busy = True
         self._set_busy(True)
         self.status.setText(title)
+        if operation == "browse_search_database":
+            self.pause_btn.setText("Cancel search")
+            self.pause_btn.setEnabled(True)
         try:
             log_path = paths["error_path"]
             log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -1654,6 +1664,11 @@ class AnonymizerWindow(QMainWindow):
         if self._copy_stderr_handle is not None:
             self._copy_stderr_handle.close()
             self._copy_stderr_handle = None
+        if self._cancel_requested:
+            self._cancel_requested = False
+            self.status.setText("Database search cancelled.")
+            self.on_finished()
+            return
         try:
             result = json.loads(paths["result_path"].read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -1687,6 +1702,14 @@ class AnonymizerWindow(QMainWindow):
         self.on_finished()
 
     def pause_or_resume(self) -> None:
+        if self.busy and self._active_operation == "browse_search_database":
+            self._cancel_requested = True
+            process = self._copy_process
+            if process is not None and process.poll() is None:
+                process.terminate()
+            self.pause_btn.setEnabled(False)
+            self.status.setText("Cancelling database search…")
+            return
         if self.copy_resume and self.pause_event is None:
             state = self.copy_resume
             try:
