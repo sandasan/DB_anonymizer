@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QStandardItem, QStandardItemModel, QTextCursor, QTextDocument
 
 from .cli import check_config
 from .core import (
@@ -2869,6 +2869,40 @@ class AnonymizerWindow(QMainWindow):
         editor.setReadOnly(True)
         editor.setPlainText(text)
         layout.addWidget(editor)
+        find_row = QHBoxLayout()
+        find_edit = QLineEdit(dialog)
+        find_edit.setPlaceholderText("Find text in this value")
+        find_row.addWidget(find_edit, 1)
+        find_previous = QPushButton("Find previous", dialog)
+        find_next = QPushButton("Find next", dialog)
+        find_row.addWidget(find_previous)
+        find_row.addWidget(find_next)
+        layout.addLayout(find_row)
+        find_status = QLabel(dialog)
+        layout.addWidget(find_status)
+
+        def find_in_value(backward: bool = False) -> None:
+            query = find_edit.text()
+            if not query:
+                find_status.setText("Enter text to find.")
+                return
+            flags = QTextDocument.FindFlag.FindBackward if backward else QTextDocument.FindFlag(0)
+            if editor.find(query, flags):
+                find_status.setText("Match found.")
+                return
+            wrap_cursor = QTextCursor(editor.document())
+            wrap_cursor.movePosition(
+                QTextCursor.MoveOperation.End if backward else QTextCursor.MoveOperation.Start
+            )
+            editor.setTextCursor(wrap_cursor)
+            if editor.find(query, flags):
+                find_status.setText("Match found (wrapped).")
+            else:
+                find_status.setText("No match found.")
+
+        find_next.clicked.connect(lambda: find_in_value())
+        find_previous.clicked.connect(lambda: find_in_value(backward=True))
+        find_edit.returnPressed.connect(lambda: find_in_value())
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=dialog)
         buttons.rejected.connect(dialog.reject)
         buttons.accepted.connect(dialog.accept)
