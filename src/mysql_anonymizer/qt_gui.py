@@ -2469,7 +2469,7 @@ class AnonymizerWindow(QMainWindow):
         else:
             self.run_task("Searching mappings…", self._lookup_worker, path, table, column, value, self.lookup_direction.currentData(), cancel_event=cancel_event, match_mode=match_mode)
 
-    def cancel_lookup(self) -> None:
+    def cancel_lookup(self, _checked: bool = False) -> None:
         if self._active_operation != "lookup" or self._active_cancel_event is None:
             return
         self._active_cancel_event.set()

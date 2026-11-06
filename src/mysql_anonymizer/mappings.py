@@ -46,7 +46,7 @@ def lookup_mapping(path: str, table: str, column: str, value: str,
         if match_mode == "contains":
             db.create_function("casefold", 1, lambda item: item.casefold() if item is not None else None)
         if cancel_event is not None:
-            db.set_progress_handler(lambda: int(cancel_event.is_set()), 1000)
+            db.set_progress_handler(lambda: int(cancel_event.is_set()), 100)
         return [row[0] for row in db.execute(sql, params)]
 
 
@@ -80,7 +80,7 @@ def lookup_value_all_fields(path: str, value: str, direction: str,
         if match_mode == "contains":
             db.create_function("casefold", 1, lambda item: item.casefold() if item is not None else None)
         if cancel_event is not None:
-            db.set_progress_handler(lambda: int(cancel_event.is_set()), 1000)
+            db.set_progress_handler(lambda: int(cancel_event.is_set()), 100)
         return db.execute(
             f"SELECT DISTINCT table_name, column_name, {result_column} FROM mappings "
             f"WHERE {condition} ORDER BY table_name, column_name, {result_column}",
