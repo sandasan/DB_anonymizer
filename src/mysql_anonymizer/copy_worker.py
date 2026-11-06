@@ -98,7 +98,7 @@ def _schema_fingerprint(tables: list[dict[str, Any]]) -> str:
     ).hexdigest()
 
 
-def _database_operation(operation: str, args: dict[str, Any]) -> Any:
+def _database_operation(operation: str, args: dict[str, Any], progress_callback=None) -> Any:
     """Run a short GUI database operation outside the Qt process."""
     if operation == "inspect":
         config = args["config"]
@@ -289,10 +289,25 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
         cursor = conn.cursor()
         matches = []
         try:
+            if progress_callback:
+                progress_callback({"event": "search_start", "status": "Reading database schema…"})
             tables = inspect_schema(conn, settings["database"])
-            for table in tables:
+            total_tables = len(tables)
+            if progress_callback:
+                progress_callback({"event": "search_start", "total_tables": total_tables})
+            for table_index, table in enumerate(tables, start=1):
+                if progress_callback:
+                    progress_callback({
+                        "event": "search_table", "total_tables": total_tables,
+                        "completed_tables": table_index - 1, "table": table["name"],
+                    })
                 columns = [column["COLUMN_NAME"] for column in table.get("columns", [])]
                 if not columns:
+                    if progress_callback:
+                        progress_callback({
+                            "event": "search_table_done", "total_tables": total_tables,
+                            "completed_tables": table_index, "table": table["name"],
+                        })
                     continue
                 if match_mode == "contains":
                     predicates = " OR ".join(
@@ -327,8 +342,19 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                     )))
                     if len(matches) >= 201:
                         break
+                if progress_callback:
+                    progress_callback({
+                        "event": "search_table_done", "total_tables": total_tables,
+                        "completed_tables": table_index, "table": table["name"],
+                    })
                 if len(matches) >= 201:
                     break
+            if progress_callback:
+                progress_callback({
+                    "event": "search_done", "total_tables": total_tables,
+                    "completed_tables": min(table_index if tables else 0, total_tables),
+                    "truncated": len(matches) > 200,
+                })
             return ["browse_database_results", matches[:200], len(matches) > 200]
         finally:
             cursor.close()
@@ -342,8 +368,16 @@ def run_operation(job_path: Path) -> int:
     result_path = Path(job["result_path"])
     error_path = Path(job["error_path"])
     activity_path = Path(job["activity_path"])
+    progress_path = Path(job["progress_path"]) if job.get("progress_path") else None
     try:
-        result = _database_operation(job["operation"], job["args"])
+        def report_progress(value: dict[str, Any]) -> None:
+            if progress_path is not None:
+                _write_private_json(progress_path, value)
+
+        result = _database_operation(
+            job["operation"], job["args"],
+            report_progress if job["operation"] == "browse_search_database" else None,
+        )
         _write_private_json(result_path, {"kind": "operation", "result": result})
         return 0
     except Exception as exc:

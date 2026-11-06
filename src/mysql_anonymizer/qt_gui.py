@@ -1337,6 +1337,35 @@ class AnonymizerWindow(QMainWindow):
 
     def on_progress(self, value: dict[str, Any]) -> None:
         event = value.get("event")
+        if event in {"search_start", "search_table", "search_table_done", "search_done"}:
+            total = value.get("total_tables")
+            completed = value.get("completed_tables", 0)
+            if total is not None:
+                progress_maximum = max(1, total)
+                if self.overall_progress.maximum() != progress_maximum:
+                    self.overall_progress.setRange(0, progress_maximum)
+                self.overall_progress.setValue(min(completed, total))
+                self.overall_eta.setText(f"{completed} of {total} tables scanned")
+            if event == "search_start":
+                self.status.setText(value.get("status", "Searching whole database…"))
+                if total is not None and total == 0:
+                    self.overall_eta.setText("No tables to search")
+            elif event == "search_table":
+                table = value.get("table", "current table")
+                self.table_eta.setText(f"Scanning {table}…")
+                self.status.setText(f"Searching whole database — table {completed + 1} of {total}: {table}")
+            elif event == "search_table_done":
+                table = value.get("table", "table")
+                self.table_eta.setText(f"Scanned {table}")
+                self.status.setText(f"Searching whole database — {completed} of {total} tables scanned")
+            else:
+                progress_maximum = max(1, total or 1)
+                if self.overall_progress.maximum() != progress_maximum:
+                    self.overall_progress.setRange(0, progress_maximum)
+                self.overall_progress.setValue(min(completed, total or 1))
+                self.overall_eta.setText(f"Scanned {completed} of {total or 0} tables")
+                self.status.setText("Search complete; preparing results…")
+            return
         now = time.monotonic()
         if event == "batch" and now - self._last_progress_ui_update < 1.5:
             return
@@ -1728,6 +1757,7 @@ class AnonymizerWindow(QMainWindow):
         job.update({
             "mode": "operation", "operation": operation, "args": args,
             "parent_pid": os.getpid(),
+            "progress_path": str(paths["progress_path"]),
         })
         save_json_atomic(str(paths["job_path"]), job)
         paths["job_path"].chmod(0o600)
@@ -1744,6 +1774,12 @@ class AnonymizerWindow(QMainWindow):
         self._set_busy(True)
         self.status.setText(title)
         if operation == "browse_search_database":
+            self.overall_title.setText("Whole database search")
+            self.overall_eta.setText("Preparing search…")
+            self.overall_progress.setRange(0, 0)
+            self.table_title.setText("Current table")
+            self.table_eta.setText("Waiting for schema…")
+            self.table_progress.setRange(0, 0)
             self.pause_btn.setText("Cancel search")
             self.pause_btn.setEnabled(True)
         try:
