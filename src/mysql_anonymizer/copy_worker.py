@@ -280,8 +280,11 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
 
     if operation == "browse_search_database":
         role, settings, term = args["role"], args["settings"], args["search"]
+        match_mode = args.get("match_mode", "contains")
         if not term:
             raise ValueError("Enter text to search for")
+        if match_mode not in {"contains", "exact"}:
+            raise ValueError(f"Unsupported database search match mode {match_mode!r}")
         conn = connect(settings)
         cursor = conn.cursor()
         matches = []
@@ -291,10 +294,16 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                 columns = [column["COLUMN_NAME"] for column in table.get("columns", [])]
                 if not columns:
                     continue
-                predicates = " OR ".join(
-                    f"LOCATE(%s, CAST(`{column.replace('`', '``')}` AS CHAR)) > 0"
-                    for column in columns
-                )
+                if match_mode == "contains":
+                    predicates = " OR ".join(
+                        f"LOCATE(%s, CAST(`{column.replace('`', '``')}` AS CHAR)) > 0"
+                        for column in columns
+                    )
+                else:
+                    predicates = " OR ".join(
+                        f"BINARY CAST(`{column.replace('`', '``')}` AS CHAR) = BINARY %s"
+                        for column in columns
+                    )
                 selected = ", ".join(f"`{column.replace('`', '``')}`" for column in columns)
                 cursor.execute(
                     f"SELECT {selected} FROM `{table['name'].replace('`', '``')}` "
@@ -302,10 +311,16 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                     (*([term] * len(columns)), 201 - len(matches)),
                 )
                 for row in cursor.fetchall():
-                    matched_columns = [
-                        column for column, value in zip(columns, row)
-                        if value is not None and term.casefold() in str(value).casefold()
-                    ]
+                    if match_mode == "contains":
+                        matched_columns = [
+                            column for column, value in zip(columns, row)
+                            if value is not None and term.casefold() in str(value).casefold()
+                        ]
+                    else:
+                        matched_columns = [
+                            column for column, value in zip(columns, row)
+                            if value is not None and str(value) == term
+                        ]
                     matches.append((table["name"], ", ".join(matched_columns), json.dumps(
                         {column: value for column, value in zip(columns, row)},
                         ensure_ascii=False, default=str,

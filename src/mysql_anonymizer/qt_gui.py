@@ -645,6 +645,9 @@ class AnonymizerWindow(QMainWindow):
         self.browse_table = QComboBox(); self.browse_table.currentTextChanged.connect(self._browse_table_changed)
         self.browse_filter = QLineEdit(); self.browse_filter.setPlaceholderText("Filter tables"); self.browse_filter.textChanged.connect(self.filter_browse_tables)
         self.browse_search_all = QLineEdit(); self.browse_search_all.setPlaceholderText("Search all columns")
+        self.browse_database_match = QComboBox()
+        self.browse_database_match.addItem("Contains", "contains")
+        self.browse_database_match.addItem("Exact", "exact")
         self.browse_column = CheckableComboBox()
         self.browse_column.add_checkable_item("All columns", None, checked=True)
         self.browse_column_value = QLineEdit(); self.browse_column_value.setPlaceholderText("Column contains…")
@@ -664,7 +667,8 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
         form.addWidget(QLabel("Filter tables"), 1, 0); form.addWidget(self.browse_filter, 1, 1, 1, 5)
-        form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 4); form.addWidget(search_database, 2, 5)
+        form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 2)
+        form.addWidget(self.browse_database_match, 2, 3); form.addWidget(search_database, 2, 5)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         form.addWidget(QLabel("Maximum records (0 = all)"), 4, 0); form.addWidget(self.browse_limit, 4, 1)
         form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4)
@@ -2656,7 +2660,8 @@ class AnonymizerWindow(QMainWindow):
         except Exception as exc: return self.error("Invalid connection settings", exc)
         self._launch_database_operation(
             "browse_search_database",
-            {"role": role, "settings": config[role], "search": term},
+            {"role": role, "settings": config[role], "search": term,
+             "match_mode": self.browse_database_match.currentData()},
             f"Searching {role} database…",
         )
 
