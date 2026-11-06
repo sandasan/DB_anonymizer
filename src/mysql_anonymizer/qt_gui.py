@@ -435,7 +435,8 @@ class AnonymizerWindow(QMainWindow):
 
     def _build_tables(self) -> None:
         layout = self._scroll_page(self.tables_tab)
-        bar = QHBoxLayout()
+        bar = QVBoxLayout()
+        selection_actions = QHBoxLayout()
         self.select_all_btn = QPushButton("Select all"); self.select_all_btn.clicked.connect(lambda: self.table_view.selectAll())
         self.clear_selection_btn = QPushButton("Clear selection"); self.clear_selection_btn.clicked.connect(lambda: self.table_view.clearSelection())
         self.include_check = QCheckBox("Select directly related tables automatically"); self.include_check.setChecked(True)
@@ -446,8 +447,16 @@ class AnonymizerWindow(QMainWindow):
         self.recreate_tables_btn = QPushButton("Recreate selected tables"); self.recreate_tables_btn.clicked.connect(self.recreate_tables)
         self.recreate_db_btn = QPushButton("Recreate destination DB"); self.recreate_db_btn.clicked.connect(self.recreate_database)
         self.clear_data_btn = QPushButton("Clear destination data"); self.clear_data_btn.clicked.connect(self.clear_destination)
-        for widget in (self.select_all_btn, self.clear_selection_btn, self.include_check,
-                       self.allow_locks_check, self.selected_top_check, self.hide_copied_check): bar.addWidget(widget)
+        selection_actions.addWidget(self.select_all_btn)
+        selection_actions.addWidget(self.clear_selection_btn)
+        selection_actions.addStretch(1)
+        bar.addLayout(selection_actions)
+        selection_options = QHBoxLayout()
+        for widget in (self.include_check, self.allow_locks_check,
+                       self.selected_top_check, self.hide_copied_check):
+            selection_options.addWidget(widget)
+        selection_options.addStretch(1)
+        bar.addLayout(selection_options)
         layout.addLayout(bar)
         range_box = QGroupBox("Copy a date/time range and its related rows")
         range_layout = QGridLayout(range_box)
@@ -473,7 +482,9 @@ class AnonymizerWindow(QMainWindow):
         self.selected_top_check.toggled.connect(self._tables_view_changed)
         self.hide_copied_check.toggled.connect(self._tables_view_changed)
         danger = QHBoxLayout(); danger.addStretch(1)
-        for widget in (self.clear_data_btn, self.recreate_tables_btn, self.recreate_db_btn): danger.addWidget(widget)
+        for widget in (self.clear_data_btn, self.recreate_tables_btn, self.recreate_db_btn):
+            widget.setMinimumWidth(widget.sizeHint().width())
+            danger.addWidget(widget)
         layout.addLayout(danger)
         filter_row = QHBoxLayout(); filter_row.addWidget(QLabel("Filter tables"))
         self.table_filter = QLineEdit(); self.table_filter.setPlaceholderText("Search table names"); self.table_filter.textChanged.connect(self.render_tables)
