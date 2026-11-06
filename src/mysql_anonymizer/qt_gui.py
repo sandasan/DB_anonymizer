@@ -616,10 +616,13 @@ class AnonymizerWindow(QMainWindow):
         self.lookup_table = QComboBox(); self.lookup_table.setEditable(False)
         self.lookup_column_filter = QLineEdit(); self.lookup_column_filter.setPlaceholderText("Filter fields")
         self.lookup_column = QComboBox(); self.lookup_value = QLineEdit()
+        self.lookup_match_mode = QComboBox()
+        self.lookup_match_mode.addItem("Exact", "exact")
+        self.lookup_match_mode.addItem("Contains (case-insensitive)", "contains")
         self.lookup_all_fields = QCheckBox("Search all tables and fields")
         self.lookup_value.textChanged.connect(self._accept_browse_cell_payload)
         self.lookup_direction = QComboBox(); self.lookup_direction.addItem("Original → anonymized", "original-to-anonymized"); self.lookup_direction.addItem("Anonymized → original", "anonymized-to-original")
-        for label, widget in (("", self.lookup_all_fields), ("Filter tables", self.lookup_table_filter), ("Table", self.lookup_table), ("Filter fields", self.lookup_column_filter), ("Field", self.lookup_column), ("Exact value", self.lookup_value), ("Direction", self.lookup_direction)):
+        for label, widget in (("", self.lookup_all_fields), ("Filter tables", self.lookup_table_filter), ("Table", self.lookup_table), ("Filter fields", self.lookup_column_filter), ("Field", self.lookup_column), ("Value", self.lookup_value), ("Match", self.lookup_match_mode), ("Direction", self.lookup_direction)):
             form.addRow(label, widget)
         self.lookup_all_fields.toggled.connect(self._toggle_lookup_scope)
         layout.addLayout(form)
@@ -633,7 +636,7 @@ class AnonymizerWindow(QMainWindow):
         buttons.addStretch(1); layout.addLayout(buttons)
         self.lookup_table_filter.textChanged.connect(self.filter_lookup_tables); self.lookup_column_filter.textChanged.connect(self.filter_lookup_columns)
         self.lookup_table.currentTextChanged.connect(self.filter_lookup_columns)
-        layout.addWidget(QLabel("Searches the selected SQLite mapping store. Matching is exact; all-fields search checks every mapped table and field in the selected direction.")); layout.addStretch(1)
+        layout.addWidget(QLabel("Searches the selected SQLite mapping store. Exact matches the whole value; Contains finds text anywhere in a value without case sensitivity. All-fields search checks every mapped table and field.")); layout.addStretch(1)
 
     def _build_browse(self) -> None:
         layout = self._scroll_page(self.browse_tab)
@@ -1166,7 +1169,7 @@ class AnonymizerWindow(QMainWindow):
         if hasattr(self, "lookup_cancel_btn"):
             lookup_controls = (self.lookup_all_fields, self.lookup_table_filter, self.lookup_table,
                                self.lookup_column_filter, self.lookup_column, self.lookup_value,
-                               self.lookup_direction, self.lookup_load_btn, self.lookup_search_btn,
+                               self.lookup_match_mode, self.lookup_direction, self.lookup_load_btn, self.lookup_search_btn,
                                self.lookup_reset_btn)
             for control in lookup_controls:
                 control.setEnabled(not lookup_busy)
@@ -2454,13 +2457,17 @@ class AnonymizerWindow(QMainWindow):
     def lookup(self) -> None:
         path, table, column = self.mapping_edit.text().strip(), self.lookup_table.currentText(), self.lookup_column.currentText()
         if not path: return self.info("Select mapping store", "Choose a mapping store first.")
+        value = self.lookup_value.text()
+        match_mode = self.lookup_match_mode.currentData()
+        if match_mode == "contains" and not value:
+            return self.info("Search text required", "Enter text to find within mapping values.")
         cancel_event = threading.Event()
         if self.lookup_all_fields.isChecked():
-            self.run_task("Searching mappings…", self._lookup_all_worker, path, self.lookup_value.text(), self.lookup_direction.currentData(), cancel_event=cancel_event)
+            self.run_task("Searching mappings…", self._lookup_all_worker, path, value, self.lookup_direction.currentData(), cancel_event=cancel_event, match_mode=match_mode)
         elif not table or not column:
             return self.info("Complete lookup fields", "Select a mapping store, table, and field.")
         else:
-            self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData(), cancel_event=cancel_event)
+            self.run_task("Searching mappings…", self._lookup_worker, path, table, column, value, self.lookup_direction.currentData(), cancel_event=cancel_event, match_mode=match_mode)
 
     def cancel_lookup(self) -> None:
         if self._active_operation != "lookup" or self._active_cancel_event is None:
@@ -2471,9 +2478,10 @@ class AnonymizerWindow(QMainWindow):
 
     @staticmethod
     def _lookup_worker(path: str, table: str, column: str, value: str, direction: str,
-                       progress: Callable, cancel_event: threading.Event | None = None) -> tuple:
+                       progress: Callable, cancel_event: threading.Event | None = None,
+                       match_mode: str = "exact") -> tuple:
         try:
-            matches = lookup_mapping(path, table, column, value, direction, cancel_event)
+            matches = lookup_mapping(path, table, column, value, direction, cancel_event, match_mode)
         except sqlite3.OperationalError:
             if cancel_event is not None and cancel_event.is_set():
                 return ("lookup_cancelled",)
@@ -2482,9 +2490,10 @@ class AnonymizerWindow(QMainWindow):
 
     @staticmethod
     def _lookup_all_worker(path: str, value: str, direction: str, progress: Callable,
-                           cancel_event: threading.Event | None = None) -> tuple:
+                           cancel_event: threading.Event | None = None,
+                           match_mode: str = "exact") -> tuple:
         try:
-            matches = lookup_value_all_fields(path, value, direction, cancel_event)
+            matches = lookup_value_all_fields(path, value, direction, cancel_event, match_mode)
         except sqlite3.OperationalError:
             if cancel_event is not None and cancel_event.is_set():
                 return ("lookup_cancelled",)

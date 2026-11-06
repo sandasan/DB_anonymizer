@@ -25,14 +25,26 @@ def open_mapping_store(path: str) -> sqlite3.Connection:
 
 def lookup_mapping(path: str, table: str, column: str, value: str,
                    direction: str = "original-to-anonymized",
-                   cancel_event: threading.Event | None = None) -> list[str]:
+                   cancel_event: threading.Event | None = None,
+                   match_mode: str = "exact") -> list[str]:
     if direction == "original-to-anonymized":
-        sql, params = "SELECT DISTINCT anonymized_value FROM mappings WHERE table_name=? AND column_name=? AND original_value=? ORDER BY anonymized_value", (table, column, value)
+        source_column, result_column = "original_value", "anonymized_value"
     elif direction == "anonymized-to-original":
-        sql, params = "SELECT DISTINCT original_value FROM mappings WHERE table_name=? AND column_name=? AND anonymized_value=? ORDER BY original_value", (table, column, value)
+        source_column, result_column = "anonymized_value", "original_value"
     else:
         raise ValueError(f"Unsupported lookup direction {direction!r}")
+    if match_mode == "exact":
+        condition = f"{source_column}=?"
+    elif match_mode == "contains":
+        condition = f"instr(casefold({source_column}), casefold(?)) > 0"
+    else:
+        raise ValueError(f"Unsupported lookup match mode {match_mode!r}")
+    sql = (f"SELECT DISTINCT {result_column} FROM mappings WHERE table_name=? "
+           f"AND column_name=? AND {condition} ORDER BY {result_column}")
+    params = (table, column, value)
     with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        if match_mode == "contains":
+            db.create_function("casefold", 1, lambda item: item.casefold() if item is not None else None)
         if cancel_event is not None:
             db.set_progress_handler(lambda: int(cancel_event.is_set()), 1000)
         return [row[0] for row in db.execute(sql, params)]
@@ -49,7 +61,8 @@ def lookup_original_value(path: str, value: str) -> list[tuple[str, str, str]]:
 
 
 def lookup_value_all_fields(path: str, value: str, direction: str,
-                            cancel_event: threading.Event | None = None) -> list[tuple[str, str, str]]:
+                            cancel_event: threading.Event | None = None,
+                            match_mode: str = "exact") -> list[tuple[str, str, str]]:
     """Find values across all mapped fields, returning table, column, and match."""
     if direction == "original-to-anonymized":
         match_column, result_column = "original_value", "anonymized_value"
@@ -57,12 +70,20 @@ def lookup_value_all_fields(path: str, value: str, direction: str,
         match_column, result_column = "anonymized_value", "original_value"
     else:
         raise ValueError(f"Unsupported lookup direction {direction!r}")
+    if match_mode == "exact":
+        condition = f"{match_column}=?"
+    elif match_mode == "contains":
+        condition = f"instr(casefold({match_column}), casefold(?)) > 0"
+    else:
+        raise ValueError(f"Unsupported lookup match mode {match_mode!r}")
     with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        if match_mode == "contains":
+            db.create_function("casefold", 1, lambda item: item.casefold() if item is not None else None)
         if cancel_event is not None:
             db.set_progress_handler(lambda: int(cancel_event.is_set()), 1000)
         return db.execute(
             f"SELECT DISTINCT table_name, column_name, {result_column} FROM mappings "
-            f"WHERE {match_column}=? ORDER BY table_name, column_name, {result_column}",
+            f"WHERE {condition} ORDER BY table_name, column_name, {result_column}",
             (value,),
         ).fetchall()
 
