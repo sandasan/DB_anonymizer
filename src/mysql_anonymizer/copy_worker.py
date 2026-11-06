@@ -220,6 +220,7 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
             selected_columns = args.get("filter_columns", [])
             if any(column not in columns for column in selected_columns):
                 raise ValueError("A selected filter column is not in the table")
+            filter_columns = selected_columns or columns
             if args["search"]:
                 conditions.append(
                     "(" + " OR ".join(
@@ -228,17 +229,17 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                     ) + ")"
                 )
                 params.extend([f"%{args['search']}%"] * len(columns))
-            if selected_columns and args["filter_value"]:
+            if args["filter_value"]:
                 conditions.append(
                     "(" + " OR ".join(
                         f"CAST(`{column.replace('`', '``')}` AS CHAR) LIKE %s"
-                        for column in selected_columns
+                        for column in filter_columns
                     ) + ")"
                 )
-                params.extend([f"%{args['filter_value']}%"] * len(selected_columns))
+                params.extend([f"%{args['filter_value']}%"] * len(filter_columns))
             where = " WHERE " + " AND ".join(conditions) if conditions else ""
             result_columns = selected_columns or columns
-            selected_sql = ", ".join(f"`{column.replace('`', '``')}`" for column in result_columns)
+            selected_sql = ", ".join(f"`{column.replace('`', '``')}`" for column in columns)
             limit = int(args.get("limit", 200))
             if limit < 0:
                 raise ValueError("Record limit cannot be negative")
@@ -251,6 +252,27 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
                 [None if value is None else str(value) for value in row]
                 for row in cursor.fetchall()
             ]
+            # MySQL LIKE follows the column/database collation, which can
+            # treat strings as equivalent even when the literal search text
+            # is absent. It also interprets % and _ in the user's input as
+            # wildcards. Keep SQL as the candidate filter, then enforce the
+            # UI's contains semantics on the returned values themselves.
+            search = args["search"].casefold()
+            filter_value = args["filter_value"].casefold() if args["filter_value"] else ""
+            filter_indexes = [columns.index(column) for column in filter_columns]
+            rows = [
+                row for row in rows
+                if (not search or any(
+                    value is not None and search in value.casefold()
+                    for value in row
+                ))
+                and (not filter_value or any(
+                    row[index] is not None and filter_value in row[index].casefold()
+                    for index in filter_indexes
+                ))
+            ]
+            result_indexes = [columns.index(column) for column in result_columns]
+            rows = [[row[index] for index in result_indexes] for row in rows]
             return ["browse_rows", table, result_columns, rows[:limit] if limit else rows]
         finally:
             cursor.close()
