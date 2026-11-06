@@ -245,6 +245,47 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
             cursor.close()
             conn.close()
 
+    if operation == "browse_search_database":
+        role, settings, term = args["role"], args["settings"], args["search"]
+        if not term:
+            raise ValueError("Enter text to search for")
+        conn = connect(settings)
+        cursor = conn.cursor()
+        matches = []
+        try:
+            tables = inspect_schema(conn, settings["database"])
+            for table in tables:
+                columns = [column["COLUMN_NAME"] for column in table.get("columns", [])]
+                if not columns:
+                    continue
+                predicates = " OR ".join(
+                    f"LOCATE(%s, CAST(`{column.replace('`', '``')}` AS CHAR)) > 0"
+                    for column in columns
+                )
+                selected = ", ".join(f"`{column.replace('`', '``')}`" for column in columns)
+                cursor.execute(
+                    f"SELECT {selected} FROM `{table['name'].replace('`', '``')}` "
+                    f"WHERE {predicates} LIMIT %s",
+                    (*([term] * len(columns)), 201 - len(matches)),
+                )
+                for row in cursor.fetchall():
+                    matched_columns = [
+                        column for column, value in zip(columns, row)
+                        if value is not None and term.casefold() in str(value).casefold()
+                    ]
+                    matches.append((table["name"], ", ".join(matched_columns), json.dumps(
+                        {column: value for column, value in zip(columns, row)},
+                        ensure_ascii=False, default=str,
+                    )))
+                    if len(matches) >= 201:
+                        break
+                if len(matches) >= 201:
+                    break
+            return ["browse_database_results", matches[:200], len(matches) > 200]
+        finally:
+            cursor.close()
+            conn.close()
+
     raise ValueError(f"Unknown database operation: {operation}")
 
 

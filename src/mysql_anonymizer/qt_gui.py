@@ -578,11 +578,12 @@ class AnonymizerWindow(QMainWindow):
         self.browse_column_value = QLineEdit(); self.browse_column_value.setPlaceholderText("Column contains…")
         load = QPushButton("Load tables"); load.clicked.connect(self.load_browse_tables)
         search = QPushButton("Search / refresh"); search.clicked.connect(self.search_browse)
+        search_database = QPushButton("Search whole database"); search_database.clicked.connect(self.search_browse_database)
         reset_column = QPushButton("Reset column filter"); reset_column.clicked.connect(self.reset_browse_column_filter)
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
         form.addWidget(QLabel("Filter tables"), 1, 0); form.addWidget(self.browse_filter, 1, 1, 1, 5)
-        form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 5)
+        form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 4); form.addWidget(search_database, 2, 5)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         layout.addLayout(form)
         self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
@@ -1188,6 +1189,11 @@ class AnonymizerWindow(QMainWindow):
                 table, self._pending_browse_table = self._pending_browse_table, None
                 self.browse_source_table(table)
         elif kind == "browse_rows": self.show_browse_rows(result[1], result[2], result[3]); self.status.setText(f"Showing {len(result[2])} rows from {result[1]}.")
+        elif kind == "browse_database_results":
+            _, rows, truncated = result
+            self.show_browse_rows("whole database", ["Table", "Matching columns", "Row values"], rows)
+            suffix = " (first 200 shown)" if truncated else ""
+            self.status.setText(f"Found {len(rows)} matching rows across the database{suffix}.")
         elif kind == "clear": self.copied_tables.clear(); self.destination_tables.difference_update(result[1]); self.render_tables(); self.save_state(); self.log_message(f"Cleared {len(result[1])} destination tables and {result[2]} mapping entries.")
 
     def on_progress(self, value: dict[str, Any]) -> None:
@@ -2401,6 +2407,19 @@ class AnonymizerWindow(QMainWindow):
              "filter_columns": self.browse_column.checked_data(),
              "filter_value": self.browse_column_value.text()},
             f"Reading {role}.{table}…",
+        )
+
+    def search_browse_database(self, *_args) -> None:
+        role = self.browse_role.currentText()
+        term = self.browse_search_all.text().strip()
+        if not term:
+            return self.error("Search text required", "Enter part of a value to search across the database.")
+        try: config = self.config()
+        except Exception as exc: return self.error("Invalid connection settings", exc)
+        self._launch_database_operation(
+            "browse_search_database",
+            {"role": role, "settings": config[role], "search": term},
+            f"Searching {role} database…",
         )
 
     def show_browse_rows(self, table: str, columns: list[str], rows: list[tuple]) -> None:
