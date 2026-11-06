@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 
 
 def open_mapping_store(path: str) -> sqlite3.Connection:
@@ -23,7 +24,8 @@ def open_mapping_store(path: str) -> sqlite3.Connection:
 
 
 def lookup_mapping(path: str, table: str, column: str, value: str,
-                   direction: str = "original-to-anonymized") -> list[str]:
+                   direction: str = "original-to-anonymized",
+                   cancel_event: threading.Event | None = None) -> list[str]:
     if direction == "original-to-anonymized":
         sql, params = "SELECT DISTINCT anonymized_value FROM mappings WHERE table_name=? AND column_name=? AND original_value=? ORDER BY anonymized_value", (table, column, value)
     elif direction == "anonymized-to-original":
@@ -31,6 +33,8 @@ def lookup_mapping(path: str, table: str, column: str, value: str,
     else:
         raise ValueError(f"Unsupported lookup direction {direction!r}")
     with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        if cancel_event is not None:
+            db.set_progress_handler(lambda: int(cancel_event.is_set()), 1000)
         return [row[0] for row in db.execute(sql, params)]
 
 
@@ -44,7 +48,8 @@ def lookup_original_value(path: str, value: str) -> list[tuple[str, str, str]]:
         ).fetchall()
 
 
-def lookup_value_all_fields(path: str, value: str, direction: str) -> list[tuple[str, str, str]]:
+def lookup_value_all_fields(path: str, value: str, direction: str,
+                            cancel_event: threading.Event | None = None) -> list[tuple[str, str, str]]:
     """Find values across all mapped fields, returning table, column, and match."""
     if direction == "original-to-anonymized":
         match_column, result_column = "original_value", "anonymized_value"
@@ -53,6 +58,8 @@ def lookup_value_all_fields(path: str, value: str, direction: str) -> list[tuple
     else:
         raise ValueError(f"Unsupported lookup direction {direction!r}")
     with sqlite3.connect(f"file:{os.path.abspath(path)}?mode=ro", uri=True) as db:
+        if cancel_event is not None:
+            db.set_progress_handler(lambda: int(cancel_event.is_set()), 1000)
         return db.execute(
             f"SELECT DISTINCT table_name, column_name, {result_column} FROM mappings "
             f"WHERE {match_column}=? ORDER BY table_name, column_name, {result_column}",

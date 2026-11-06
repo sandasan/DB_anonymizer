@@ -8,6 +8,7 @@ import faulthandler
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -169,6 +170,7 @@ class AnonymizerWindow(QMainWindow):
         self._copy_progress_mtime_ns: int | None = None
         self._active_worker_mode = "copy"
         self._active_operation: str | None = None
+        self._active_cancel_event: threading.Event | None = None
         self._cancel_requested = False
         self._last_progress_ui_update = 0.0
         self.busy = False
@@ -621,10 +623,14 @@ class AnonymizerWindow(QMainWindow):
             form.addRow(label, widget)
         self.lookup_all_fields.toggled.connect(self._toggle_lookup_scope)
         layout.addLayout(form)
-        buttons = QHBoxLayout(); load_btn = QPushButton("Load fields"); load_btn.clicked.connect(self.load_lookup_fields)
-        find_btn = QPushButton("Find mapping"); find_btn.clicked.connect(self.lookup)
-        reset = QPushButton("Reset filters"); reset.clicked.connect(self.reset_lookup)
-        buttons.addWidget(load_btn); buttons.addWidget(find_btn); buttons.addWidget(reset); buttons.addStretch(1); layout.addLayout(buttons)
+        buttons = QHBoxLayout(); self.lookup_load_btn = QPushButton("Load fields"); self.lookup_load_btn.clicked.connect(self.load_lookup_fields)
+        self.lookup_search_btn = QPushButton("Find mapping"); self.lookup_search_btn.clicked.connect(self.lookup)
+        self.lookup_reset_btn = QPushButton("Reset filters"); self.lookup_reset_btn.clicked.connect(self.reset_lookup)
+        self.lookup_cancel_btn = QPushButton("Stop search"); self.lookup_cancel_btn.setEnabled(False)
+        self.lookup_cancel_btn.clicked.connect(self.cancel_lookup)
+        buttons.addWidget(self.lookup_load_btn); buttons.addWidget(self.lookup_search_btn)
+        buttons.addWidget(self.lookup_reset_btn); buttons.addWidget(self.lookup_cancel_btn)
+        buttons.addStretch(1); layout.addLayout(buttons)
         self.lookup_table_filter.textChanged.connect(self.filter_lookup_tables); self.lookup_column_filter.textChanged.connect(self.filter_lookup_columns)
         self.lookup_table.currentTextChanged.connect(self.filter_lookup_columns)
         layout.addWidget(QLabel("Searches the selected SQLite mapping store. Matching is exact; all-fields search checks every mapped table and field in the selected direction.")); layout.addStretch(1)
@@ -1137,7 +1143,10 @@ class AnonymizerWindow(QMainWindow):
     # Generic worker dispatch and feedback
     def run_task(self, title: str, operation: Callable, *args, **kwargs) -> None:
         if self.busy: return
-        self.busy = True; self.status.setText(title); self._set_busy(True)
+        self.busy = True
+        self._active_operation = "lookup" if "cancel_event" in kwargs else None
+        self._active_cancel_event = kwargs.get("cancel_event")
+        self.status.setText(title); self._set_busy(True)
         task = Task(operation, *args, **kwargs)
         task.signals.progress.connect(self.on_progress)
         task.signals.result.connect(self.on_result)
@@ -1150,7 +1159,21 @@ class AnonymizerWindow(QMainWindow):
 
     def _set_busy(self, busy: bool) -> None:
         for button in (self.save_config_btn, self.inspect_btn, self.test_btn, self.copy_btn, self.recreate_tables_btn, self.recreate_db_btn, self.clear_data_btn): button.setEnabled(not busy)
-        self.tabs.setEnabled(not busy)
+        lookup_busy = busy and self._active_operation == "lookup"
+        self.tabs.setEnabled(not busy or lookup_busy)
+        for index in range(self.tabs.count()):
+            self.tabs.setTabEnabled(index, not lookup_busy or self.tabs.widget(index) is self.lookup_tab)
+        if hasattr(self, "lookup_cancel_btn"):
+            lookup_controls = (self.lookup_all_fields, self.lookup_table_filter, self.lookup_table,
+                               self.lookup_column_filter, self.lookup_column, self.lookup_value,
+                               self.lookup_direction, self.lookup_load_btn, self.lookup_search_btn,
+                               self.lookup_reset_btn)
+            for control in lookup_controls:
+                control.setEnabled(not lookup_busy)
+            self.lookup_cancel_btn.setEnabled(lookup_busy and self._active_cancel_event is not None
+                                              and not self._active_cancel_event.is_set())
+            if not lookup_busy:
+                self._toggle_lookup_scope(self.lookup_all_fields.isChecked())
         edits = (self.config_edit, self.rules_edit, self.mapping_edit,
                  *(field for fields in self.fields.values() for field in fields.values()),
                  *self.passwords.values())
@@ -1164,6 +1187,7 @@ class AnonymizerWindow(QMainWindow):
     def on_finished(self) -> None:
         self.busy = False; self._set_busy(False)
         self._active_task = None
+        self._active_cancel_event = None
         self._active_operation = None
         if self._copy_progress_timer is not None:
             self._copy_progress_timer.stop()
@@ -1262,6 +1286,8 @@ class AnonymizerWindow(QMainWindow):
             if self._pending_lookup_selection is not None:
                 table, column = self._pending_lookup_selection; self._pending_lookup_selection = None
                 self._select_lookup_field(table, column)
+        elif kind == "lookup_cancelled":
+            self.status.setText("Lookup search stopped.")
         elif kind == "lookup":
             _, direction, table, column, value, matches = result
             self.log_message("\n".join(matches) if matches else f"No matching value found for {table}.{column} = {value!r}.")
@@ -2428,20 +2454,42 @@ class AnonymizerWindow(QMainWindow):
     def lookup(self) -> None:
         path, table, column = self.mapping_edit.text().strip(), self.lookup_table.currentText(), self.lookup_column.currentText()
         if not path: return self.info("Select mapping store", "Choose a mapping store first.")
+        cancel_event = threading.Event()
         if self.lookup_all_fields.isChecked():
-            self.run_task("Searching mappings…", self._lookup_all_worker, path, self.lookup_value.text(), self.lookup_direction.currentData())
+            self.run_task("Searching mappings…", self._lookup_all_worker, path, self.lookup_value.text(), self.lookup_direction.currentData(), cancel_event=cancel_event)
         elif not table or not column:
             return self.info("Complete lookup fields", "Select a mapping store, table, and field.")
         else:
-            self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData())
+            self.run_task("Searching mappings…", self._lookup_worker, path, table, column, self.lookup_value.text(), self.lookup_direction.currentData(), cancel_event=cancel_event)
+
+    def cancel_lookup(self) -> None:
+        if self._active_operation != "lookup" or self._active_cancel_event is None:
+            return
+        self._active_cancel_event.set()
+        self.lookup_cancel_btn.setEnabled(False)
+        self.status.setText("Stopping Lookup search…")
 
     @staticmethod
-    def _lookup_worker(path: str, table: str, column: str, value: str, direction: str, progress: Callable) -> tuple:
-        return ("lookup", direction, table, column, value, lookup_mapping(path, table, column, value, direction))
+    def _lookup_worker(path: str, table: str, column: str, value: str, direction: str,
+                       progress: Callable, cancel_event: threading.Event | None = None) -> tuple:
+        try:
+            matches = lookup_mapping(path, table, column, value, direction, cancel_event)
+        except sqlite3.OperationalError:
+            if cancel_event is not None and cancel_event.is_set():
+                return ("lookup_cancelled",)
+            raise
+        return ("lookup_cancelled",) if cancel_event is not None and cancel_event.is_set() else ("lookup", direction, table, column, value, matches)
 
     @staticmethod
-    def _lookup_all_worker(path: str, value: str, direction: str, progress: Callable) -> tuple:
-        return ("lookup_all", direction, value, lookup_value_all_fields(path, value, direction))
+    def _lookup_all_worker(path: str, value: str, direction: str, progress: Callable,
+                           cancel_event: threading.Event | None = None) -> tuple:
+        try:
+            matches = lookup_value_all_fields(path, value, direction, cancel_event)
+        except sqlite3.OperationalError:
+            if cancel_event is not None and cancel_event.is_set():
+                return ("lookup_cancelled",)
+            raise
+        return ("lookup_cancelled",) if cancel_event is not None and cancel_event.is_set() else ("lookup_all", direction, value, matches)
 
     # Source/destination browsing
     def load_browse_tables(self) -> None:
