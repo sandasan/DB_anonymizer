@@ -658,17 +658,21 @@ class AnonymizerWindow(QMainWindow):
         load = QPushButton("Load tables"); load.clicked.connect(self.load_browse_tables)
         search = QPushButton("Search / refresh"); search.clicked.connect(self.search_browse)
         search_database = QPushButton("Search whole database"); search_database.clicked.connect(self.search_browse_database)
+        self.browse_cancel_search = QPushButton("Stop search")
+        self.browse_cancel_search.setEnabled(False)
+        self.browse_cancel_search.clicked.connect(self.pause_or_resume)
         reset_column = QPushButton("Reset column filter"); reset_column.clicked.connect(self.reset_browse_column_filter)
         # Grid columns can become narrower than a button's label when the window
         # is resized. Keep the Browse actions at their natural label width; the
         # containing scroll area can then scroll horizontally when needed.
-        for button in (self.browse_back, self.browse_forward, load, search, search_database, reset_column):
+        for button in (self.browse_back, self.browse_forward, load, search, search_database,
+                       self.browse_cancel_search, reset_column):
             button.setMinimumWidth(button.sizeHint().width())
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
         form.addWidget(QLabel("Filter tables"), 1, 0); form.addWidget(self.browse_filter, 1, 1, 1, 5)
         form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 2)
-        form.addWidget(self.browse_database_match, 2, 3); form.addWidget(search_database, 2, 5)
+        form.addWidget(self.browse_database_match, 2, 3); form.addWidget(search_database, 2, 5); form.addWidget(self.browse_cancel_search, 2, 6)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         form.addWidget(QLabel("Maximum records (0 = all)"), 4, 0); form.addWidget(self.browse_limit, 4, 1)
         form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4)
@@ -1189,6 +1193,8 @@ class AnonymizerWindow(QMainWindow):
         searching = busy and self._active_operation == "browse_search_database"
         self.pause_btn.setText("Cancel search" if searching else "Pause copy")
         self.pause_btn.setEnabled(searching or self.copy_resume is not None or self.pause_event is not None)
+        if hasattr(self, "browse_cancel_search"):
+            self.browse_cancel_search.setEnabled(searching and not self._cancel_requested)
         self.skip_failed_btn.setEnabled(not busy and self.copy_resume is not None and self.failed_copy_table is not None)
 
     def on_finished(self) -> None:
@@ -1831,6 +1837,8 @@ class AnonymizerWindow(QMainWindow):
             if process is not None and process.poll() is None:
                 process.terminate()
             self.pause_btn.setEnabled(False)
+            if hasattr(self, "browse_cancel_search"):
+                self.browse_cancel_search.setEnabled(False)
             self.status.setText("Cancelling database search…")
             return
         if self.copy_resume and self.pause_event is None:
