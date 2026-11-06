@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
     QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit, QMenu,
-    QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton,
+    QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -163,6 +163,11 @@ class AnonymizerWindow(QMainWindow):
         self.destination_schema: dict[str, dict[str, Any]] = {}
         self.copied_tables: set[str] = set()
         self.browse_tables: dict[str, list[dict[str, Any]]] = {"source": [], "destination": []}
+        self._browse_history: list[dict[str, Any]] = []
+        self._browse_history_index = -1
+        self._browse_exact_filter: dict[str, Any] | None = None
+        self._pending_reference_table: str | None = None
+        self._browse_history_restore = False
         self.mapping_fields: dict[str, list[str]] = {}
         self._pending_lookup_selection: tuple[str, str] | None = None
         self._pending_browse_table: str | None = None
@@ -578,6 +583,10 @@ class AnonymizerWindow(QMainWindow):
         self.browse_column = CheckableComboBox()
         self.browse_column.add_checkable_item("All columns", None, checked=True)
         self.browse_column_value = QLineEdit(); self.browse_column_value.setPlaceholderText("Column contains…")
+        self.browse_limit = QSpinBox(); self.browse_limit.setRange(0, 1000000); self.browse_limit.setValue(200)
+        self.browse_limit.setSpecialValueText("All")
+        self.browse_back = QPushButton("← Back"); self.browse_back.setEnabled(False); self.browse_back.clicked.connect(lambda: self._browse_history_move(-1))
+        self.browse_forward = QPushButton("Forward →"); self.browse_forward.setEnabled(False); self.browse_forward.clicked.connect(lambda: self._browse_history_move(1))
         load = QPushButton("Load tables"); load.clicked.connect(self.load_browse_tables)
         search = QPushButton("Search / refresh"); search.clicked.connect(self.search_browse)
         search_database = QPushButton("Search whole database"); search_database.clicked.connect(self.search_browse_database)
@@ -587,9 +596,12 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(QLabel("Filter tables"), 1, 0); form.addWidget(self.browse_filter, 1, 1, 1, 5)
         form.addWidget(QLabel("Search all columns"), 2, 0); form.addWidget(self.browse_search_all, 2, 1, 1, 4); form.addWidget(search_database, 2, 5)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
+        form.addWidget(QLabel("Maximum records (0 = all)"), 4, 0); form.addWidget(self.browse_limit, 4, 1)
+        form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4)
         layout.addLayout(form)
         self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
         self.browse_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.browse_view.cellDoubleClicked.connect(self._navigate_browse_reference)
         copy_cell = QPushButton("Copy selected cell for Lookup")
         copy_cell.setToolTip("Copy the selected cell with its table and column so it can be pasted into Lookup.")
         copy_cell.clicked.connect(self.copy_browse_cell_for_lookup)
@@ -1190,6 +1202,10 @@ class AnonymizerWindow(QMainWindow):
             self.log_message("\n".join(lines) if lines else f"No {label} value found for {value!r} across mapped fields.")
         elif kind == "browse_tables":
             _, role, tables = result; self.browse_tables[role] = tables; self.filter_browse_tables(); self.status.setText(f"Loaded {len(tables)} {role} tables.")
+            if self._pending_reference_table and role == self.browse_role.currentText():
+                target, self._pending_reference_table = self._pending_reference_table, None
+                self.browse_table.setCurrentText(target)
+                self.search_browse()
             if role == "source" and self._pending_browse_table:
                 table, self._pending_browse_table = self._pending_browse_table, None
                 self.browse_source_table(table)
@@ -2423,14 +2439,82 @@ class AnonymizerWindow(QMainWindow):
         try: config = self.config()
         except Exception as exc: return self.error("Invalid connection settings", exc)
         columns = [c["COLUMN_NAME"] for c in item["columns"]]
+        state = {"role": role, "table": table, "search": self.browse_search_all.text(),
+                 "filter_columns": self.browse_column.checked_data(), "filter_value": self.browse_column_value.text(),
+                 "limit": self.browse_limit.value(), "exact_filter": copy.deepcopy(self._browse_exact_filter)}
+        if not self._browse_history_restore and (not self._browse_history or self._browse_history[self._browse_history_index] != state):
+            self._browse_history = self._browse_history[:self._browse_history_index + 1]
+            self._browse_history.append(state)
+            self._browse_history_index = len(self._browse_history) - 1
+            self._update_browse_history_buttons()
         self._launch_database_operation(
             "browse_rows",
             {"role": role, "settings": config[role], "table": table,
              "columns": columns, "search": self.browse_search_all.text(),
              "filter_columns": self.browse_column.checked_data(),
-             "filter_value": self.browse_column_value.text()},
+             "filter_value": self.browse_column_value.text(), "limit": self.browse_limit.value(),
+             "exact_filter": self._browse_exact_filter},
             f"Reading {role}.{table}…",
         )
+
+    def _update_browse_history_buttons(self) -> None:
+        self.browse_back.setEnabled(self._browse_history_index > 0)
+        self.browse_forward.setEnabled(self._browse_history_index + 1 < len(self._browse_history))
+
+    def _browse_history_move(self, step: int) -> None:
+        target = self._browse_history_index + step
+        if not 0 <= target < len(self._browse_history):
+            return
+        self._browse_history_index = target
+        state = self._browse_history[target]
+        self._browse_history_restore = True
+        try:
+            self.browse_role.blockSignals(True)
+            self.browse_role.setCurrentText(state["role"])
+            self.browse_role.blockSignals(False)
+            self.browse_filter.clear()
+            if not any(t.get("name") == state["table"] for t in self.browse_tables.get(state["role"], [])):
+                self._pending_reference_table = state["table"]
+                self.load_browse_tables()
+                return
+            self.browse_table.blockSignals(True)
+            self.browse_table.setCurrentText(state["table"])
+            self.browse_table.blockSignals(False)
+            self.browse_search_all.setText(state["search"])
+            self.browse_column.set_checked_data(state["filter_columns"])
+            self.browse_column_value.setText(state["filter_value"])
+            self.browse_limit.setValue(state["limit"])
+            self._browse_exact_filter = copy.deepcopy(state["exact_filter"])
+            self.search_browse()
+        finally:
+            self._browse_history_restore = False
+        self._update_browse_history_buttons()
+
+    def _navigate_browse_reference(self, row: int, column: int) -> None:
+        role, table = self.browse_role.currentText(), self.browse_table.currentText()
+        schema_table = next((entry for entry in self.browse_tables.get(role, []) if entry.get("name") == table), None)
+        header = self.browse_view.horizontalHeaderItem(column)
+        value_item = self.browse_view.item(row, column)
+        if not schema_table or not header or not value_item:
+            return
+        fk = next((key for key in schema_table.get("foreign_keys", [])
+                   for pair in key.get("columns", []) if pair.get("column") == header.text()), None)
+        if not fk:
+            return
+        parent = fk["referenced_table"]
+        referenced_column = next(pair["referenced_column"] for pair in fk["columns"] if pair["column"] == header.text())
+        raw_value = value_item.data(Qt.ItemDataRole.UserRole)
+        if raw_value is None:
+            return
+        self._browse_exact_filter = {"column": referenced_column, "value": raw_value}
+        self.browse_search_all.clear()
+        self.browse_column_value.clear()
+        if not any(entry.get("name") == parent for entry in self.browse_tables.get(role, [])):
+            self._pending_reference_table = parent
+            self.load_browse_tables()
+            return
+        self.browse_table.setCurrentText(parent)
+        self.search_browse()
 
     def search_browse_database(self, *_args) -> None:
         role = self.browse_role.currentText()
@@ -2447,10 +2531,19 @@ class AnonymizerWindow(QMainWindow):
 
     def show_browse_rows(self, table: str, columns: list[str], rows: list[tuple]) -> None:
         self.browse_view.clear(); self.browse_view.setColumnCount(len(columns)); self.browse_view.setHorizontalHeaderLabels(columns); self.browse_view.setRowCount(len(rows))
+        role = self.browse_role.currentText()
+        schema_table = next((entry for entry in self.browse_tables.get(role, []) if entry.get("name") == table), None)
+        reference_columns = {pair["column"]: key["referenced_table"]
+                             for key in (schema_table or {}).get("foreign_keys", [])
+                             for pair in key.get("columns", [])}
         for r, row in enumerate(rows):
             for c, value in enumerate(row):
                 text = "NULL" if value is None else str(value)
-                self.browse_view.setItem(r, c, QTableWidgetItem(text))
+                item = QTableWidgetItem(text)
+                item.setData(Qt.ItemDataRole.UserRole, value)
+                if columns[c] in reference_columns:
+                    item.setToolTip(f"Double-click to open the referenced row in {reference_columns[columns[c]]}")
+                self.browse_view.setItem(r, c, item)
         self.browse_view.resizeColumnsToContents()
 
     def resizeEvent(self, event) -> None:

@@ -210,6 +210,13 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
         cursor = conn.cursor()
         try:
             conditions, params = [], []
+            exact_filter = args.get("exact_filter")
+            if exact_filter:
+                exact_column = exact_filter.get("column")
+                if exact_column not in columns:
+                    raise ValueError("Reference column is not in the table")
+                conditions.append(f"`{exact_column.replace('`', '``')}` = %s")
+                params.append(exact_filter.get("value"))
             selected_columns = args.get("filter_columns", [])
             if any(column not in columns for column in selected_columns):
                 raise ValueError("A selected filter column is not in the table")
@@ -232,15 +239,19 @@ def _database_operation(operation: str, args: dict[str, Any]) -> Any:
             where = " WHERE " + " AND ".join(conditions) if conditions else ""
             result_columns = selected_columns or columns
             selected_sql = ", ".join(f"`{column.replace('`', '``')}`" for column in result_columns)
-            cursor.execute(
-                f"SELECT {selected_sql} FROM `{table.replace('`', '``')}`{where} LIMIT 201",
-                tuple(params),
-            )
+            limit = int(args.get("limit", 200))
+            if limit < 0:
+                raise ValueError("Record limit cannot be negative")
+            sql = f"SELECT {selected_sql} FROM `{table.replace('`', '``')}`{where}"
+            if limit:
+                cursor.execute(sql + " LIMIT %s", (*params, limit + 1))
+            else:
+                cursor.execute(sql, tuple(params))
             rows = [
                 [None if value is None else str(value) for value in row]
                 for row in cursor.fetchall()
             ]
-            return ["browse_rows", table, result_columns, rows[:200]]
+            return ["browse_rows", table, result_columns, rows[:limit] if limit else rows]
         finally:
             cursor.close()
             conn.close()
