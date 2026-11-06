@@ -2764,19 +2764,46 @@ class AnonymizerWindow(QMainWindow):
         dialog.setWindowTitle(f"Tables to skip — {role}")
         dialog.resize(420, 520)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("Select tables to exclude from whole database searches. Use Shift-click to select a range; Ctrl-click to toggle individual tables."))
+        layout.addWidget(QLabel("Check tables to exclude from whole database searches. You can also Shift-click a range and choose Check selected."))
         filter_edit = QLineEdit(dialog)
         filter_edit.setPlaceholderText("Filter tables by name")
         layout.addWidget(filter_edit)
         table_list = QListWidget(dialog)
         table_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         current_skips = self._browse_search_skip_tables[role]
+        selected_names = set(current_skips)
         for table in sorted(tables, key=lambda entry: entry["name"].casefold()):
             name = table["name"]
             table_list.addItem(name)
-            if name in current_skips:
-                table_list.item(table_list.count() - 1).setSelected(True)
+            item = table_list.item(table_list.count() - 1)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if name in current_skips else Qt.CheckState.Unchecked)
         layout.addWidget(table_list)
+
+        def check_item(item, checked: bool) -> None:
+            item.setCheckState(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked)
+
+        def check_selected(checked: bool) -> None:
+            table_list.blockSignals(True)
+            for item in table_list.selectedItems():
+                if not item.isHidden():
+                    check_item(item, checked)
+            table_list.blockSignals(False)
+            selected_names.clear()
+            selected_names.update(
+                table_list.item(index).text()
+                for index in range(table_list.count())
+                if table_list.item(index).checkState() == Qt.CheckState.Checked
+            )
+
+        def item_check_changed(item) -> None:
+            if item.checkState() == Qt.CheckState.Checked:
+                selected_names.add(item.text())
+            else:
+                selected_names.discard(item.text())
+
+        table_list.itemChanged.connect(item_check_changed)
+
         def filter_table_items(query: str) -> None:
             folded_query = query.casefold().strip()
             for index in range(table_list.count()):
@@ -2784,18 +2811,33 @@ class AnonymizerWindow(QMainWindow):
                 item.setHidden(folded_query not in item.text().casefold())
 
         filter_edit.textChanged.connect(filter_table_items)
+        selection_buttons = QHBoxLayout()
+        check_selected_btn = QPushButton("Check selected", dialog)
+        check_selected_btn.clicked.connect(lambda: check_selected(True))
+        uncheck_selected_btn = QPushButton("Uncheck selected", dialog)
+        uncheck_selected_btn.clicked.connect(lambda: check_selected(False))
+        selection_buttons.addWidget(check_selected_btn)
+        selection_buttons.addWidget(uncheck_selected_btn)
+        layout.addLayout(selection_buttons)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=dialog,
         )
         select_none = QPushButton("Select none", dialog)
-        select_none.clicked.connect(table_list.clearSelection)
+        def clear_all_selections() -> None:
+            selected_names.clear()
+            table_list.blockSignals(True)
+            for index in range(table_list.count()):
+                table_list.item(index).setCheckState(Qt.CheckState.Unchecked)
+            table_list.blockSignals(False)
+
+        select_none.clicked.connect(clear_all_selections)
         buttons.addButton(select_none, QDialogButtonBox.ButtonRole.ResetRole)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._browse_search_skip_tables[role] = {item.text() for item in table_list.selectedItems()}
+            self._browse_search_skip_tables[role] = selected_names
             self._update_browse_skip_button()
             self._schedule_interface_state_save()
 
