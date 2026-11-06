@@ -305,15 +305,21 @@ class AnonymizerWindow(QMainWindow):
             visibility.addWidget(toggle)
         visibility.addSpacing(12)
         self.save_interface_default_btn = QPushButton("Save current as default")
+        self.save_interface_default_btn.setMinimumWidth(self.save_interface_default_btn.sizeHint().width())
         self.save_interface_default_btn.setToolTip("Save the current window layout and interface options as your default")
         self.save_interface_default_btn.clicked.connect(self.save_interface_defaults)
         self.restore_interface_default_btn = QPushButton("Restore default")
+        self.restore_interface_default_btn.setMinimumWidth(self.restore_interface_default_btn.sizeHint().width())
         self.restore_interface_default_btn.setToolTip("Restore the interface settings saved as default")
         self.restore_interface_default_btn.clicked.connect(self.restore_interface_defaults)
         visibility.addWidget(self.save_interface_default_btn)
         visibility.addWidget(self.restore_interface_default_btn)
         visibility.addStretch(1)
         visibility_widget = QWidget(); visibility_widget.setLayout(visibility)
+        # Keep the scroll area's content at the layout's full natural width so
+        # long button labels don't overlap neighboring controls when narrowed.
+        visibility_widget.adjustSize()
+        visibility_widget.setMinimumSize(visibility.sizeHint())
         visibility_scroll = QScrollArea(); visibility_scroll.setWidget(visibility_widget)
         visibility_scroll.setWidgetResizable(False)
         visibility_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -354,6 +360,8 @@ class AnonymizerWindow(QMainWindow):
         actions.addWidget(self.auto_check); actions.addStretch(1); actions.addWidget(self.pause_btn); actions.addWidget(self.copy_btn)
         actions.addWidget(self.skip_failed_btn)
         self.actions_panel = QWidget(); self.actions_panel.setLayout(actions)
+        self.actions_panel.adjustSize()
+        self.actions_panel.setMinimumSize(actions.sizeHint())
         actions_scroll = QScrollArea(); actions_scroll.setWidget(self.actions_panel)
         actions_scroll.setWidgetResizable(False)
         actions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -393,12 +401,22 @@ class AnonymizerWindow(QMainWindow):
         self.setCentralWidget(central)
         self.setStyleSheet("""
             QWidget { font-size: 10pt; }
+            QPushButton { padding: 5px 8px; min-height: 20px; }
+            QCheckBox { spacing: 6px; }
             QGroupBox { font-weight: 600; border: 1px solid #d5dce6; border-radius: 5px; margin-top: 9px; padding: 8px; }
             QGroupBox::title { subcontrol-origin: margin; left: 9px; padding: 0 4px; }
             QHeaderView::section { background: #e9eef5; padding: 6px; border: 0; font-weight: 600; }
             QPushButton#primaryButton { color: white; background: #2563eb; padding: 7px 14px; font-weight: 600; }
             QPushButton#saveRulesButton[unsaved="true"] { color: white; background: #c2410c; border: 1px solid #9a3412; font-weight: 600; }
         """)
+        # Recompute scrollable header widths after the stylesheet has changed
+        # control metrics, preventing button captions from colliding.
+        for button in (self.save_interface_default_btn, self.restore_interface_default_btn):
+            button.setMinimumWidth(button.sizeHint().width())
+        visibility_widget.adjustSize()
+        visibility_widget.setMinimumSize(visibility.sizeHint())
+        self.actions_panel.adjustSize()
+        self.actions_panel.setMinimumSize(actions.sizeHint())
 
     @staticmethod
     def _path_edit(value: str) -> QLineEdit:
