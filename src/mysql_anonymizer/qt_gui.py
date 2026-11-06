@@ -143,8 +143,12 @@ class AnonymizerWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MySQL Anonymized Copy")
-        self.resize(1180, 820)
-        self.setMinimumSize(760, 560)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        initial_width = min(1180, available.width()) if available is not None else 1180
+        initial_height = min(820, available.height()) if available is not None else 820
+        self.resize(initial_width, initial_height)
+        self.setMinimumSize(min(620, initial_width), min(420, initial_height))
         self.pool = QThreadPool.globalInstance()
         self._active_task: Task | None = None
         self._copy_progress_timer: QTimer | None = None
@@ -298,7 +302,13 @@ class AnonymizerWindow(QMainWindow):
         visibility.addWidget(self.save_interface_default_btn)
         visibility.addWidget(self.restore_interface_default_btn)
         visibility.addStretch(1)
-        root.addLayout(visibility)
+        visibility_widget = QWidget(); visibility_widget.setLayout(visibility)
+        visibility_scroll = QScrollArea(); visibility_scroll.setWidget(visibility_widget)
+        visibility_scroll.setWidgetResizable(False)
+        visibility_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        visibility_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        visibility_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        root.addWidget(visibility_scroll)
         paths = QFormLayout()
         self.config_edit = self._path_edit(self.config_path)
         config_row = self._browse_row(self.config_edit, self.choose_config, self.save_config_as)
@@ -333,7 +343,12 @@ class AnonymizerWindow(QMainWindow):
         actions.addWidget(self.auto_check); actions.addStretch(1); actions.addWidget(self.pause_btn); actions.addWidget(self.copy_btn)
         actions.addWidget(self.skip_failed_btn)
         self.actions_panel = QWidget(); self.actions_panel.setLayout(actions)
-        root.addWidget(self.actions_panel)
+        actions_scroll = QScrollArea(); actions_scroll.setWidget(self.actions_panel)
+        actions_scroll.setWidgetResizable(False)
+        actions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        actions_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        actions_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        root.addWidget(actions_scroll)
         self.overall_title = QLabel("Overall progress")
         self.overall_eta = QLabel("ETA: —")
         self.overall_progress = QProgressBar(); self.overall_progress.setRange(0, 1000)
@@ -404,6 +419,7 @@ class AnonymizerWindow(QMainWindow):
             password = QLineEdit(); password.setEchoMode(QLineEdit.Password); form.addRow("Password", password)
             form.addRow(QLabel("Leave blank to use password_env from config."))
             self.fields[role] = fields; self.passwords[role] = password; splitter.addWidget(group)
+        splitter.setStretchFactor(0, 1); splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter); layout.addStretch(1)
 
     def _build_tables(self) -> None:
@@ -456,7 +472,7 @@ class AnonymizerWindow(QMainWindow):
         self.table_view.setSelectionMode(QTreeWidget.ExtendedSelection); self.table_view.setSortingEnabled(True)
         self.table_view.setItemDelegateForColumn(3, TableSizeDelegate(self.table_view))
         self.table_view.header().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.table_view.setMinimumHeight(300); layout.addWidget(self.table_view, 1)
+        self.table_view.setMinimumHeight(180); layout.addWidget(self.table_view, 1)
         self.table_view.itemSelectionChanged.connect(self._selected_items_changed)
         layout.addWidget(QLabel("✓ marks tables present in the destination. Foreign-key dependencies are validated before copy."))
         self.destination_width_notice = QLabel()
@@ -498,7 +514,7 @@ class AnonymizerWindow(QMainWindow):
         self.rule_tree.customContextMenuRequested.connect(self.show_rule_context_menu)
         for index in (0, 1, 2, 3, 4): self.rule_tree.header().setSectionResizeMode(index, QHeaderView.ResizeToContents)
         self.rule_tree.header().setSectionResizeMode(5, QHeaderView.Stretch)
-        self.rule_tree.setMinimumHeight(240); layout.addWidget(self.rule_tree, 1)
+        self.rule_tree.setMinimumHeight(160); layout.addWidget(self.rule_tree, 1)
         self.rule_mode = QComboBox(); self.rule_mode.addItems(["Unconfigured", "Preserve", "Anonymize"])
         self.rule_type = QComboBox(); self.rule_type.addItems(["email", "url", "phone", "payment_key", "password", "card_mask", "card_number", "card_payexpirydate", "card_validitydate", "card_expirydate", "card_securitycode", "card_type", "description", "name", "entity_name", "address", "file_name", "ip_address", "date_shift", "constant", "unique", "passport", "pnr_code", "location_generalization", "numeric_variance", "coordinate_round", "date_round"])
         self._all_rule_types = [self.rule_type.itemText(i) for i in range(self.rule_type.count())]
@@ -516,7 +532,7 @@ class AnonymizerWindow(QMainWindow):
         self.rule_compatibility_notice.setStyleSheet("QLabel#ruleCompatibilityNotice { color: #991b1b; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; padding: 6px; }")
         self.rule_compatibility_notice.hide()
         layout.addWidget(self.rule_compatibility_notice)
-        self.rules_text = QPlainTextEdit(); self.rules_text.setMinimumHeight(280)
+        self.rules_text = QPlainTextEdit(); self.rules_text.setMinimumHeight(150)
         self._rules_refresh_timer = QTimer(self); self._rules_refresh_timer.setSingleShot(True); self._rules_refresh_timer.setInterval(250); self._rules_refresh_timer.timeout.connect(self.refresh_rules)
         self.rules_text.textChanged.connect(lambda: self._rules_refresh_timer.start())
         self.rules_text.textChanged.connect(self._update_save_rules_button)
@@ -599,7 +615,7 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(QLabel("Maximum records (0 = all)"), 4, 0); form.addWidget(self.browse_limit, 4, 1)
         form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4)
         layout.addLayout(form)
-        self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(360)
+        self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(180)
         self.browse_view.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.browse_view.cellDoubleClicked.connect(self._navigate_browse_reference)
         copy_cell = QPushButton("Copy selected cell for Lookup")
@@ -608,6 +624,14 @@ class AnonymizerWindow(QMainWindow):
         layout.addWidget(copy_cell)
         layout.addWidget(self.browse_view, 1)
         self.browse_search_all.returnPressed.connect(self.search_browse); self.browse_column_value.returnPressed.connect(self.search_browse)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        splitter = getattr(self, "connections_splitter", None)
+        if splitter is not None:
+            orientation = Qt.Orientation.Vertical if event.size().width() < 900 else Qt.Orientation.Horizontal
+            if splitter.orientation() != orientation:
+                splitter.setOrientation(orientation)
 
     # Connection settings and preferences
     def _load_state(self) -> None:
