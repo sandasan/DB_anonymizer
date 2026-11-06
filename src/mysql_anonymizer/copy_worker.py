@@ -281,6 +281,7 @@ def _database_operation(operation: str, args: dict[str, Any], progress_callback=
     if operation == "browse_search_database":
         role, settings, term = args["role"], args["settings"], args["search"]
         match_mode = args.get("match_mode", "contains")
+        skip_tables = set(args.get("skip_tables", []))
         if not term:
             raise ValueError("Enter text to search for")
         if match_mode not in {"contains", "exact"}:
@@ -296,6 +297,14 @@ def _database_operation(operation: str, args: dict[str, Any], progress_callback=
             if progress_callback:
                 progress_callback({"event": "search_start", "total_tables": total_tables})
             for table_index, table in enumerate(tables, start=1):
+                if table["name"] in skip_tables:
+                    if progress_callback:
+                        progress_callback({
+                            "event": "search_table_done", "total_tables": total_tables,
+                            "completed_tables": table_index, "table": table["name"],
+                            "skipped": True,
+                        })
+                    continue
                 if progress_callback:
                     progress_callback({
                         "event": "search_table", "total_tables": total_tables,

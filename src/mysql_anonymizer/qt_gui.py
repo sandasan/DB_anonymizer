@@ -21,10 +21,10 @@ from urllib.parse import quote
 
 from PySide6.QtCore import QByteArray, QObject, QRunnable, Qt, QThreadPool, QTimer, Signal, QDateTime
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QDialog, QDialogButtonBox,
+    QApplication, QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QDialog, QDialogButtonBox,
     QFormLayout, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QPlainTextEdit, QProgressBar,
-    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QInputDialog, QDateTimeEdit, QMenu,
+    QPushButton, QScrollArea, QSplitter, QTabWidget, QTableWidget, QListWidget, QInputDialog, QDateTimeEdit, QMenu,
     QStyledItemDelegate, QTableWidgetItem, QTreeWidget, QTreeWidgetItem, QToolButton, QSpinBox,
     QVBoxLayout, QWidget,
 )
@@ -180,6 +180,9 @@ class AnonymizerWindow(QMainWindow):
         self.destination_schema: dict[str, dict[str, Any]] = {}
         self.copied_tables: set[str] = set()
         self.browse_tables: dict[str, list[dict[str, Any]]] = {"source": [], "destination": []}
+        self._browse_tables_loaded: set[str] = set()
+        self._browse_search_skip_tables: dict[str, set[str]] = {"source": set(), "destination": set()}
+        self._pending_skip_table_picker: str | None = None
         self._browse_history: list[dict[str, Any]] = []
         self._browse_history_index = -1
         self._browse_exact_filter: dict[str, Any] | None = None
@@ -642,6 +645,7 @@ class AnonymizerWindow(QMainWindow):
         layout = self._scroll_page(self.browse_tab)
         form = QGridLayout()
         self.browse_role = QComboBox(); self.browse_role.addItems(["source", "destination"]); self.browse_role.currentTextChanged.connect(self.filter_browse_tables)
+        self.browse_role.currentTextChanged.connect(self._update_browse_skip_button)
         self.browse_table = QComboBox(); self.browse_table.currentTextChanged.connect(self._browse_table_changed)
         self.browse_filter = QLineEdit(); self.browse_filter.setPlaceholderText("Filter tables"); self.browse_filter.textChanged.connect(self.filter_browse_tables)
         self.browse_search_all = QLineEdit(); self.browse_search_all.setPlaceholderText("Search all columns")
@@ -661,12 +665,14 @@ class AnonymizerWindow(QMainWindow):
         self.browse_cancel_search = QPushButton("Stop search")
         self.browse_cancel_search.setEnabled(False)
         self.browse_cancel_search.clicked.connect(self.pause_or_resume)
+        self.browse_skip_tables_btn = QPushButton("Skip tables (0)")
+        self.browse_skip_tables_btn.clicked.connect(self.choose_browse_search_skip_tables)
         reset_column = QPushButton("Reset column filter"); reset_column.clicked.connect(self.reset_browse_column_filter)
         # Grid columns can become narrower than a button's label when the window
         # is resized. Keep the Browse actions at their natural label width; the
         # containing scroll area can then scroll horizontally when needed.
         for button in (self.browse_back, self.browse_forward, load, search, search_database,
-                       self.browse_cancel_search, reset_column):
+                       self.browse_cancel_search, self.browse_skip_tables_btn, reset_column):
             button.setMinimumWidth(button.sizeHint().width())
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
@@ -675,7 +681,7 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(self.browse_database_match, 2, 3); form.addWidget(search_database, 2, 5); form.addWidget(self.browse_cancel_search, 2, 6)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         form.addWidget(QLabel("Maximum records (0 = all)"), 4, 0); form.addWidget(self.browse_limit, 4, 1)
-        form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4)
+        form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4); form.addWidget(self.browse_skip_tables_btn, 4, 5)
         layout.addLayout(form)
         self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(180)
         self.browse_view.fullValueRequested.connect(self.show_browse_cell_value)
@@ -793,6 +799,9 @@ class AnonymizerWindow(QMainWindow):
             "rule_constant": self.rule_constant.text(),
             "selected_rule_fields": [[item.text(0), item.text(1)] for item in self.rule_tree.selectedItems()],
             "browse_columns": self.browse_column.checked_data(),
+            "browse_search_skip_tables": {
+                role: sorted(tables) for role, tables in self._browse_search_skip_tables.items()
+            },
         }
 
     def _apply_interface_settings(self, settings: dict[str, Any], *, persist: bool = True) -> None:
@@ -801,6 +810,17 @@ class AnonymizerWindow(QMainWindow):
             self._pending_lookup_selection = None
             self._pending_interface_browse_table = None
             self._pending_interface_browse_columns = []
+            saved_skip_tables = settings.get("browse_search_skip_tables", {})
+            if isinstance(saved_skip_tables, dict):
+                self._browse_search_skip_tables = {
+                    role: {value for value in values if isinstance(value, str)}
+                    if isinstance(values, list) else set()
+                    for role, values in saved_skip_tables.items()
+                    if role in {"source", "destination"}
+                }
+                self._browse_search_skip_tables.setdefault("source", set())
+                self._browse_search_skip_tables.setdefault("destination", set())
+                self._update_browse_skip_button()
             for key, method in (("geometry", self.restoreGeometry), ("window_state", self.restoreState)):
                 encoded = settings.get(key)
                 if isinstance(encoded, str) and encoded:
@@ -1172,6 +1192,8 @@ class AnonymizerWindow(QMainWindow):
         for button in (self.save_config_btn, self.inspect_btn, self.test_btn, self.copy_btn, self.recreate_tables_btn, self.recreate_db_btn, self.clear_data_btn): button.setEnabled(not busy)
         lookup_busy = busy and self._active_operation == "lookup"
         searching = busy and self._active_operation == "browse_search_database"
+        if hasattr(self, "browse_skip_tables_btn"):
+            self.browse_skip_tables_btn.setEnabled(not busy)
         self.tabs.setEnabled(not busy or lookup_busy or searching)
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
@@ -1319,7 +1341,11 @@ class AnonymizerWindow(QMainWindow):
             self.status.setText(f"Found {len(matches)} mapping(s) across mapped fields." if matches
                                 else f"No {label} value found across mapped fields.")
         elif kind == "browse_tables":
-            _, role, tables = result; self.browse_tables[role] = tables; self.filter_browse_tables(); self.status.setText(f"Loaded {len(tables)} {role} tables.")
+            _, role, tables = result; self.browse_tables[role] = tables; self._browse_tables_loaded.add(role); self.filter_browse_tables(); self.status.setText(f"Loaded {len(tables)} {role} tables.")
+            self._update_browse_skip_button()
+            if self._pending_skip_table_picker == role:
+                self._pending_skip_table_picker = None
+                self.choose_browse_search_skip_tables()
             if self._pending_reference_table and role == self.browse_role.currentText():
                 target, self._pending_reference_table = self._pending_reference_table, None
                 self.browse_table.setCurrentText(target)
@@ -1356,8 +1382,9 @@ class AnonymizerWindow(QMainWindow):
                 self.status.setText(f"Searching whole database — table {completed + 1} of {total}: {table}")
             elif event == "search_table_done":
                 table = value.get("table", "table")
-                self.table_eta.setText(f"Scanned {table}")
-                self.status.setText(f"Searching whole database — {completed} of {total} tables scanned")
+                self.table_eta.setText(f"Skipped {table}" if value.get("skipped") else f"Scanned {table}")
+                action = "skipped" if value.get("skipped") else "scanned"
+                self.status.setText(f"Searching whole database — {completed} of {total} tables {action}")
             else:
                 progress_maximum = max(1, total or 1)
                 if self.overall_progress.maximum() != progress_maximum:
@@ -2710,9 +2737,57 @@ class AnonymizerWindow(QMainWindow):
         self._launch_database_operation(
             "browse_search_database",
             {"role": role, "settings": config[role], "search": term,
-             "match_mode": self.browse_database_match.currentData()},
+             "match_mode": self.browse_database_match.currentData(),
+             "skip_tables": sorted(self._browse_search_skip_tables[role])},
             f"Searching {role} database…",
         )
+
+    def _update_browse_skip_button(self, *_args) -> None:
+        if not hasattr(self, "browse_skip_tables_btn"):
+            return
+        role = self.browse_role.currentText()
+        count = len(self._browse_search_skip_tables.get(role, set()))
+        self.browse_skip_tables_btn.setText(f"Skip tables ({count})")
+
+    def choose_browse_search_skip_tables(self, *_args) -> None:
+        role = self.browse_role.currentText()
+        tables = self.browse_tables.get(role, [])
+        if role not in self._browse_tables_loaded:
+            self._pending_skip_table_picker = role
+            self.load_browse_tables()
+            return
+        if not tables:
+            self.info("No tables found", f"The {role} database has no tables to select.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Tables to skip — {role}")
+        dialog.resize(420, 520)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Select tables to exclude from whole database searches. Use Shift-click to select a range; Ctrl-click to toggle individual tables."))
+        table_list = QListWidget(dialog)
+        table_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        current_skips = self._browse_search_skip_tables[role]
+        for table in sorted(tables, key=lambda entry: entry["name"].casefold()):
+            name = table["name"]
+            table_list.addItem(name)
+            if name in current_skips:
+                table_list.item(table_list.count() - 1).setSelected(True)
+        layout.addWidget(table_list)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        select_none = QPushButton("Select none", dialog)
+        select_none.clicked.connect(table_list.clearSelection)
+        buttons.addButton(select_none, QDialogButtonBox.ButtonRole.ResetRole)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._browse_search_skip_tables[role] = {item.text() for item in table_list.selectedItems()}
+            self._update_browse_skip_button()
+            self._schedule_interface_state_save()
 
     def show_browse_rows(self, table: str, columns: list[str], rows: list[tuple]) -> None:
         self.browse_view.clear(); self.browse_view.setColumnCount(len(columns)); self.browse_view.setHorizontalHeaderLabels(columns); self.browse_view.setRowCount(len(rows))
