@@ -1294,11 +1294,15 @@ class AnonymizerWindow(QMainWindow):
         elif kind == "lookup":
             _, direction, table, column, value, matches = result
             self.log_message("\n".join(matches) if matches else f"No matching value found for {table}.{column} = {value!r}.")
+            self.status.setText(f"Found {len(matches)} mapping(s) in {table}.{column}." if matches
+                                else f"No mapping found in {table}.{column}.")
         elif kind == "lookup_all":
             _, direction, value, matches = result
             label = "anonymized" if direction == "original-to-anonymized" else "original"
             lines = [f"{table}.{column}: {mapped}" for table, column, mapped in matches]
             self.log_message("\n".join(lines) if lines else f"No {label} value found for {value!r} across mapped fields.")
+            self.status.setText(f"Found {len(matches)} mapping(s) across mapped fields." if matches
+                                else f"No {label} value found across mapped fields.")
         elif kind == "browse_tables":
             _, role, tables = result; self.browse_tables[role] = tables; self.filter_browse_tables(); self.status.setText(f"Loaded {len(tables)} {role} tables.")
             if self._pending_reference_table and role == self.browse_role.currentText():
