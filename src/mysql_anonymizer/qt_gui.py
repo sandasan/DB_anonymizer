@@ -2765,6 +2765,9 @@ class AnonymizerWindow(QMainWindow):
         dialog.resize(420, 520)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Select tables to exclude from whole database searches. Use Shift-click to select a range; Ctrl-click to toggle individual tables."))
+        filter_edit = QLineEdit(dialog)
+        filter_edit.setPlaceholderText("Filter tables by name")
+        layout.addWidget(filter_edit)
         table_list = QListWidget(dialog)
         table_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         current_skips = self._browse_search_skip_tables[role]
@@ -2774,6 +2777,13 @@ class AnonymizerWindow(QMainWindow):
             if name in current_skips:
                 table_list.item(table_list.count() - 1).setSelected(True)
         layout.addWidget(table_list)
+        def filter_table_items(query: str) -> None:
+            folded_query = query.casefold().strip()
+            for index in range(table_list.count()):
+                item = table_list.item(index)
+                item.setHidden(folded_query not in item.text().casefold())
+
+        filter_edit.textChanged.connect(filter_table_items)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=dialog,
