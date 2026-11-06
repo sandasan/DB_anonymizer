@@ -1171,9 +1171,15 @@ class AnonymizerWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         for button in (self.save_config_btn, self.inspect_btn, self.test_btn, self.copy_btn, self.recreate_tables_btn, self.recreate_db_btn, self.clear_data_btn): button.setEnabled(not busy)
         lookup_busy = busy and self._active_operation == "lookup"
-        self.tabs.setEnabled(not busy or lookup_busy)
+        searching = busy and self._active_operation == "browse_search_database"
+        self.tabs.setEnabled(not busy or lookup_busy or searching)
         for index in range(self.tabs.count()):
-            self.tabs.setTabEnabled(index, not lookup_busy or self.tabs.widget(index) is self.lookup_tab)
+            tab = self.tabs.widget(index)
+            self.tabs.setTabEnabled(
+                index,
+                not busy or (lookup_busy and tab is self.lookup_tab)
+                or (searching and tab is self.browse_tab),
+            )
         if hasattr(self, "lookup_cancel_btn"):
             lookup_controls = (self.lookup_all_fields, self.lookup_table_filter, self.lookup_table,
                                self.lookup_column_filter, self.lookup_column, self.lookup_value,
@@ -1190,7 +1196,6 @@ class AnonymizerWindow(QMainWindow):
                  *self.passwords.values())
         for edit in edits:
             edit.setEnabled(not busy)
-        searching = busy and self._active_operation == "browse_search_database"
         self.pause_btn.setText("Cancel search" if searching else "Pause copy")
         self.pause_btn.setEnabled(searching or self.copy_resume is not None or self.pause_event is not None)
         if hasattr(self, "browse_cancel_search"):
