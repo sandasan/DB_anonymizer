@@ -618,6 +618,11 @@ class AnonymizerWindow(QMainWindow):
         search = QPushButton("Search / refresh"); search.clicked.connect(self.search_browse)
         search_database = QPushButton("Search whole database"); search_database.clicked.connect(self.search_browse_database)
         reset_column = QPushButton("Reset column filter"); reset_column.clicked.connect(self.reset_browse_column_filter)
+        # Grid columns can become narrower than a button's label when the window
+        # is resized. Keep the Browse actions at their natural label width; the
+        # containing scroll area can then scroll horizontally when needed.
+        for button in (self.browse_back, self.browse_forward, load, search, search_database, reset_column):
+            button.setMinimumWidth(button.sizeHint().width())
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
         form.addWidget(QLabel("Filter tables"), 1, 0); form.addWidget(self.browse_filter, 1, 1, 1, 5)
