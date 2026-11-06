@@ -186,6 +186,10 @@ class AnonymizerWindow(QMainWindow):
         self._browse_history: list[dict[str, Any]] = []
         self._browse_history_index = -1
         self._browse_exact_filter: dict[str, Any] | None = None
+        self._browse_database_results: dict[str, Any] | None = None
+        self._browse_showing_database_results = False
+        self._pending_database_search_row: tuple[str, dict[str, Any], str, bool] | None = None
+        self._database_search_role: str | None = None
         self._pending_reference_table: str | None = None
         self._browse_history_restore = False
         self.mapping_fields: dict[str, list[str]] = {}
@@ -667,12 +671,16 @@ class AnonymizerWindow(QMainWindow):
         self.browse_cancel_search.clicked.connect(self.pause_or_resume)
         self.browse_skip_tables_btn = QPushButton("Skip tables (0)")
         self.browse_skip_tables_btn.clicked.connect(self.choose_browse_search_skip_tables)
+        self.browse_return_search_btn = QPushButton("Return to search results")
+        self.browse_return_search_btn.setEnabled(False)
+        self.browse_return_search_btn.clicked.connect(self.return_to_database_search_results)
         reset_column = QPushButton("Reset column filter"); reset_column.clicked.connect(self.reset_browse_column_filter)
         # Grid columns can become narrower than a button's label when the window
         # is resized. Keep the Browse actions at their natural label width; the
         # containing scroll area can then scroll horizontally when needed.
         for button in (self.browse_back, self.browse_forward, load, search, search_database,
-                       self.browse_cancel_search, self.browse_skip_tables_btn, reset_column):
+                       self.browse_cancel_search, self.browse_skip_tables_btn,
+                       self.browse_return_search_btn, reset_column):
             button.setMinimumWidth(button.sizeHint().width())
         form.addWidget(QLabel("Database"), 0, 0); form.addWidget(self.browse_role, 0, 1); form.addWidget(load, 0, 2)
         form.addWidget(QLabel("Table"), 0, 3); form.addWidget(self.browse_table, 0, 4, 1, 2)
@@ -681,7 +689,7 @@ class AnonymizerWindow(QMainWindow):
         form.addWidget(self.browse_database_match, 2, 3); form.addWidget(search_database, 2, 5); form.addWidget(self.browse_cancel_search, 2, 6)
         form.addWidget(QLabel("Column filter"), 3, 0); form.addWidget(self.browse_column, 3, 1, 1, 2); form.addWidget(self.browse_column_value, 3, 3); form.addWidget(reset_column, 3, 4); form.addWidget(search, 3, 5)
         form.addWidget(QLabel("Maximum records (0 = all)"), 4, 0); form.addWidget(self.browse_limit, 4, 1)
-        form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4); form.addWidget(self.browse_skip_tables_btn, 4, 5)
+        form.addWidget(self.browse_back, 4, 3); form.addWidget(self.browse_forward, 4, 4); form.addWidget(self.browse_skip_tables_btn, 4, 5); form.addWidget(self.browse_return_search_btn, 4, 6)
         layout.addLayout(form)
         self.browse_view = BrowseDataTable(); self.browse_view.setAlternatingRowColors(True); self.browse_view.setMinimumHeight(180)
         self.browse_view.fullValueRequested.connect(self.show_browse_cell_value)
@@ -1194,6 +1202,11 @@ class AnonymizerWindow(QMainWindow):
         searching = busy and self._active_operation == "browse_search_database"
         if hasattr(self, "browse_skip_tables_btn"):
             self.browse_skip_tables_btn.setEnabled(not busy)
+        if hasattr(self, "browse_return_search_btn"):
+            self.browse_return_search_btn.setEnabled(
+                not busy and self._browse_database_results is not None
+                and not self._browse_showing_database_results
+            )
         self.tabs.setEnabled(not busy or lookup_busy or searching)
         for index in range(self.tabs.count()):
             tab = self.tabs.widget(index)
@@ -1346,6 +1359,15 @@ class AnonymizerWindow(QMainWindow):
             if self._pending_skip_table_picker == role:
                 self._pending_skip_table_picker = None
                 self.choose_browse_search_skip_tables()
+            if self._pending_database_search_row and self._pending_database_search_row[2] == role:
+                table_name, row_values, pending_role, force_reload = self._pending_database_search_row
+                self._pending_database_search_row = None
+                QTimer.singleShot(
+                    0,
+                    lambda: self._open_database_search_row(
+                        table_name, row_values, pending_role, force_reload=force_reload,
+                    ),
+                )
             if self._pending_reference_table and role == self.browse_role.currentText():
                 target, self._pending_reference_table = self._pending_reference_table, None
                 self.browse_table.setCurrentText(target)
@@ -1356,6 +1378,13 @@ class AnonymizerWindow(QMainWindow):
         elif kind == "browse_rows": self.show_browse_rows(result[1], result[2], result[3]); self.status.setText(f"Showing {len(result[2])} rows from {result[1]}.")
         elif kind == "browse_database_results":
             _, rows, truncated = result
+            role = self._database_search_role or self.browse_role.currentText()
+            self._browse_database_results = {"rows": rows, "truncated": truncated, "role": role}
+            self._database_search_role = None
+            self.browse_role.blockSignals(True)
+            self.browse_role.setCurrentText(role)
+            self.browse_role.blockSignals(False)
+            self.browse_return_search_btn.setEnabled(True)
             self.show_browse_rows("whole database", ["Table", "Matching columns", "Row values"], rows)
             suffix = " (first 200 shown)" if truncated else ""
             self.status.setText(f"Found {len(rows)} matching rows across the database{suffix}.")
@@ -2702,6 +2731,9 @@ class AnonymizerWindow(QMainWindow):
         self._update_browse_history_buttons()
 
     def _navigate_browse_reference(self, row: int, column: int) -> None:
+        if self._browse_showing_database_results:
+            self._navigate_database_search_result(row)
+            return
         role, table = self.browse_role.currentText(), self.browse_table.currentText()
         schema_table = next((entry for entry in self.browse_tables.get(role, []) if entry.get("name") == table), None)
         header = self.browse_view.horizontalHeaderItem(column)
@@ -2727,6 +2759,81 @@ class AnonymizerWindow(QMainWindow):
         self.browse_table.setCurrentText(parent)
         self.search_browse()
 
+    def _navigate_database_search_result(self, row: int) -> None:
+        if self._browse_database_results is None:
+            return
+        table_item = self.browse_view.item(row, 0)
+        values_item = self.browse_view.item(row, 2)
+        if table_item is None or values_item is None:
+            return
+        table_name = table_item.data(Qt.ItemDataRole.UserRole) or table_item.text()
+        raw_values = values_item.data(Qt.ItemDataRole.UserRole)
+        try:
+            row_values = json.loads(raw_values) if isinstance(raw_values, str) else raw_values
+        except (TypeError, json.JSONDecodeError):
+            return self.error("Could not open search result", "The row values are not valid JSON.")
+        if not isinstance(row_values, dict):
+            return self.error("Could not open search result", "The row values do not contain a table row.")
+        role = self._browse_database_results["role"]
+        self.browse_role.blockSignals(True)
+        self.browse_role.setCurrentText(role)
+        self.browse_role.blockSignals(False)
+        self.browse_filter.clear()
+        self.filter_browse_tables()
+        if role not in self._browse_tables_loaded:
+            self._pending_database_search_row = (table_name, row_values, role, False)
+            self.load_browse_tables()
+            return
+        self._open_database_search_row(table_name, row_values, role)
+
+    def _open_database_search_row(
+        self, table_name: str, row_values: dict[str, Any], role: str, *, force_reload: bool = False,
+    ) -> None:
+        table_schema = next(
+            (table for table in self.browse_tables.get(role, []) if table.get("name") == table_name),
+            None,
+        )
+        if table_schema is None:
+            if force_reload:
+                return self.info("Table unavailable", f"Could not find {table_name} in the {role} database.")
+            self.browse_role.blockSignals(True)
+            self.browse_role.setCurrentText(role)
+            self.browse_role.blockSignals(False)
+            self._pending_database_search_row = (table_name, row_values, role, True)
+            self.load_browse_tables()
+            return
+
+        primary_columns = [
+            column["COLUMN_NAME"] for column in table_schema.get("columns", [])
+            if str(column.get("COLUMN_KEY", "")).upper() == "PRI"
+            and column["COLUMN_NAME"] in row_values
+        ]
+        identity_columns = primary_columns or list(row_values)
+        self.browse_search_all.clear()
+        self.browse_column_value.clear()
+        self.browse_column.set_checked_data([])
+        self._browse_exact_filter = {
+            "values": {column: row_values[column] for column in identity_columns},
+        }
+        self.browse_table.blockSignals(True)
+        self.browse_table.setCurrentText(table_name)
+        self.browse_table.blockSignals(False)
+        self.search_browse()
+
+    def return_to_database_search_results(self) -> None:
+        if self._browse_database_results is None:
+            return
+        role = self._browse_database_results["role"]
+        self.browse_role.blockSignals(True)
+        self.browse_role.setCurrentText(role)
+        self.browse_role.blockSignals(False)
+        self.show_browse_rows("whole database", ["Table", "Matching columns", "Row values"],
+                              self._browse_database_results["rows"])
+        suffix = " (first 200 shown)" if self._browse_database_results["truncated"] else ""
+        self.status.setText(
+            f"Found {len(self._browse_database_results['rows'])} matching rows across the database{suffix}."
+        )
+
     def search_browse_database(self, *_args) -> None:
         role = self.browse_role.currentText()
         term = self.browse_search_all.text().strip()
@@ -2734,6 +2841,7 @@ class AnonymizerWindow(QMainWindow):
             return self.error("Search text required", "Enter part of a value to search across the database.")
         try: config = self.config()
         except Exception as exc: return self.error("Invalid connection settings", exc)
+        self._database_search_role = role
         self._launch_database_operation(
             "browse_search_database",
             {"role": role, "settings": config[role], "search": term,
@@ -2842,6 +2950,11 @@ class AnonymizerWindow(QMainWindow):
             self._schedule_interface_state_save()
 
     def show_browse_rows(self, table: str, columns: list[str], rows: list[tuple]) -> None:
+        self._browse_showing_database_results = table == "whole database"
+        self.browse_return_search_btn.setEnabled(
+            not self.busy and self._browse_database_results is not None
+            and not self._browse_showing_database_results
+        )
         self.browse_view.clear(); self.browse_view.setColumnCount(len(columns)); self.browse_view.setHorizontalHeaderLabels(columns); self.browse_view.setRowCount(len(rows))
         role = self.browse_role.currentText()
         schema_table = next((entry for entry in self.browse_tables.get(role, []) if entry.get("name") == table), None)
@@ -2853,6 +2966,8 @@ class AnonymizerWindow(QMainWindow):
                 text = "NULL" if value is None else str(value)
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, value)
+                if self._browse_showing_database_results and columns[c] == "Row values":
+                    item.setToolTip("Double-click to open this row in Browse data")
                 if columns[c] in reference_columns:
                     item.setToolTip(f"Double-click to open the referenced row in {reference_columns[columns[c]]}")
                 self.browse_view.setItem(r, c, item)

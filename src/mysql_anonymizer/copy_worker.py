@@ -212,11 +212,23 @@ def _database_operation(operation: str, args: dict[str, Any], progress_callback=
             conditions, params = [], []
             exact_filter = args.get("exact_filter")
             if exact_filter:
-                exact_column = exact_filter.get("column")
-                if exact_column not in columns:
-                    raise ValueError("Reference column is not in the table")
-                conditions.append(f"`{exact_column.replace('`', '``')}` = %s")
-                params.append(exact_filter.get("value"))
+                exact_values = exact_filter.get("values")
+                if exact_values is not None:
+                    if not isinstance(exact_values, dict) or any(column not in columns for column in exact_values):
+                        raise ValueError("Exact row columns are not in the table")
+                    for exact_column, exact_value in exact_values.items():
+                        quoted_column = f"`{exact_column.replace('`', '``')}`"
+                        if exact_value is None:
+                            conditions.append(f"{quoted_column} IS NULL")
+                        else:
+                            conditions.append(f"{quoted_column} = %s")
+                            params.append(exact_value)
+                else:
+                    exact_column = exact_filter.get("column")
+                    if exact_column not in columns:
+                        raise ValueError("Reference column is not in the table")
+                    conditions.append(f"`{exact_column.replace('`', '``')}` = %s")
+                    params.append(exact_filter.get("value"))
             selected_columns = args.get("filter_columns", [])
             if any(column not in columns for column in selected_columns):
                 raise ValueError("A selected filter column is not in the table")
