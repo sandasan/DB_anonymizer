@@ -1297,7 +1297,7 @@ class AnonymizerWindow(QMainWindow):
             self.status.setText(status)
         elif kind == "connection_report": self.log_message(result[1]); self.info("Connection test", result[1])
         elif kind == "copy":
-            _, counts, names, fields, identity = result; self.copied_tables.update(names); self.destination_tables.update(names); self.render_tables(); self.copy_resume = None; self.pause_event = None; self.pause_btn.setText("Pause copy"); self.log_message("Copy complete.\n" + "\n".join(f"  {k}: {v} rows" for k,v in counts.items())); self.status.setText("Copy complete.")
+            _, counts, names, fields, identity = result; self.tabs.setCurrentWidget(self.tables_tab); self.copied_tables.update(names); self.destination_tables.update(names); self.render_tables(); self.copy_resume = None; self.pause_event = None; self.pause_btn.setText("Pause copy"); self.log_message("Copy complete.\n" + "\n".join(f"  {k}: {v} rows" for k,v in counts.items())); self.status.setText("Copy complete.")
             self.overall_progress.setValue(1000)
             self.overall_eta.setText("ETA: complete"); self.table_eta.setText("ETA: complete")
             self.copied_destination_identity = identity
@@ -1652,6 +1652,10 @@ class AnonymizerWindow(QMainWindow):
             self.render_tables()
 
     def copy_selected(self) -> None:
+        # Copy is launched from the Tables view. Keep that view active while the
+        # worker runs so a tab change caused by other UI activity doesn't leave
+        # the user on Browse data after starting or completing the copy.
+        self.tabs.setCurrentWidget(self.tables_tab)
         self.copy("copy")
 
     def copy(self, action: str = "copy") -> None:
