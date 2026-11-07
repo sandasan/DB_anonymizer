@@ -1601,7 +1601,7 @@ class AnonymizerWindow(QMainWindow):
         items = []
         for table in tables:
             name = table["name"]
-            if self.hide_copied_check.isChecked() and name in self.copied_tables: continue
+            if self.hide_copied_check.isChecked() and name in self.destination_tables: continue
             if query and query not in name.casefold(): continue
             refs = ", ".join(table.get("references", []))
             size = table.get("size_bytes")
